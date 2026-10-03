@@ -241,8 +241,16 @@ def is_do_nothing_trap(task):
     )
 
 
-def main():
-    tasks = scorer.load_tasks()
+def main(argv=None):
+    paths = [Path(arg) for arg in (argv if argv is not None else sys.argv[1:])]
+    if not paths:
+        paths = [scorer.TASKS_PATH]
+
+    tasks = []
+    for path in paths:
+        loaded = scorer.load_tasks(path)
+        print(f"loaded {len(loaded)} tasks from {path}")
+        tasks.extend(loaded)
     print(f"tasks loaded: {len(tasks)}")
 
     problems = check_schema(tasks)
