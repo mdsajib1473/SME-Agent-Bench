@@ -132,12 +132,16 @@ Route complaints to the correct department:
 - Damaged items and wrong items received: product_quality.
 - Everything else: general.
 
-Set priority to high for damaged items, or for a delay of more than 5 days.
-A delay is more than 5 days when the fixed clock is more than 5 full 24-hour
-days past the expected delivery date. When the order carries no expected
-delivery date, measure from shipped_at instead. A delay of exactly 5 days is not
-more than 5 days, so it stays at normal priority. Set priority to normal in
-every other case.
+Set priority to high for damaged items, or for a delivery delay of more than
+5 days.
+
+A delivery delay is measured from the order's shipped_at value, and only while
+the order is still in the shipped status, meaning it has left the warehouse and
+has not been delivered. The delay is more than 5 days when the fixed clock is
+more than 5 full 24-hour days after shipped_at. A delay of exactly 5 days is not
+more than 5 days, so it stays at normal priority. An order that is already
+delivered has no delivery delay, whatever its dates say. Set priority to normal
+in every other case.
 
 If the complaint names no order and no order can be found, still open the ticket
 in the matching department with the caller's description as the summary, and

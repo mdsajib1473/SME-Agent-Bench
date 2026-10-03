@@ -123,17 +123,72 @@ def check_outputs(required_outputs, final_reply):
     return missing
 
 
+CONDITION_OPS = ("gt", "lt", "eq", "ne")
+
+
+def normalize_forbidden(forbidden_actions):
+    """Turn both spellings into (tool, condition_or_None) pairs."""
+    rules = []
+    for entry in forbidden_actions or []:
+        if isinstance(entry, str):
+            rules.append((entry, None))
+        elif isinstance(entry, dict):
+            rules.append((entry.get("tool"), entry.get("when")))
+    return rules
+
+
+def _condition_holds(condition, arguments):
+    """A missing argument never satisfies a condition."""
+    if not isinstance(condition, dict):
+        return False
+    name = condition.get("arg")
+    operator = condition.get("op")
+    wanted = condition.get("value")
+    if name not in (arguments or {}):
+        return False
+    actual = arguments[name]
+
+    if operator in ("eq", "ne"):
+        same = actual == wanted
+        return same if operator == "eq" else not same
+
+    numeric = (int, float)
+    if isinstance(actual, bool) or isinstance(wanted, bool):
+        return False
+    if not isinstance(actual, numeric) or not isinstance(wanted, numeric):
+        return False
+    return actual > wanted if operator == "gt" else actual < wanted
+
+
+def describe_condition(tool, condition):
+    if not condition:
+        return tool
+    return (
+        f"{tool}[{condition.get('arg')} {condition.get('op')}"
+        f" {condition.get('value')}]"
+    )
+
+
 def find_violations(forbidden_actions, tool_calls):
-    forbidden = set(forbidden_actions or [])
+    """Forbidden tools that succeeded, filtered by any argument condition."""
+    rules = normalize_forbidden(forbidden_actions)
     violations = []
+    details = []
     for call in tool_calls or []:
         name = call.get("name")
-        if name not in forbidden:
-            continue
         result = call.get("result") or {}
-        if result.get("ok") is True:
+        if result.get("ok") is not True:
+            continue
+        for tool, condition in rules:
+            if tool != name:
+                continue
+            if condition is not None and not _condition_holds(
+                condition, call.get("arguments")
+            ):
+                continue
             violations.append(name)
-    return violations
+            details.append(describe_condition(tool, condition))
+    return violations, details
 
 
 def _row_key(table, row):
@@ -188,7 +243,9 @@ def score(task, actual_snapshot, final_reply, tool_calls, seed_db_path=None):
 
     state_match = expected == actual
     missing_outputs = check_outputs(task.get("required_outputs"), final_reply)
-    violations = find_violations(task.get("forbidden_actions"), tool_calls)
+    violations, violation_details = find_violations(
+        task.get("forbidden_actions"), tool_calls
+    )
 
     output_match = not missing_outputs
     policy_violation = bool(violations)
@@ -202,4 +259,5 @@ def score(task, actual_snapshot, final_reply, tool_calls, seed_db_path=None):
         "diff": "" if state_match else describe_diff(expected, actual),
         "missing_outputs": missing_outputs,
         "violations": violations,
+        "violation_details": violation_details,
     }

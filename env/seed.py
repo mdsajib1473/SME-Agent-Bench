@@ -80,11 +80,19 @@ PRODUCTS = [
 TIERS = ["regular", "silver", "gold"]
 
 REFUND_WINDOW_DAYS = 7
+DELAY_THRESHOLD_DAYS = 5
 
 # Day 7 is skipped so that no delivered_at lands within 12 hours of the refund
 # window boundary. Every delivered order is at least 24 hours clear of it.
 DELIVERED_DAY_OFFSETS = [
     day for day in range(1, 21) if day != REFUND_WINDOW_DAYS
+]
+
+# Shipped orders span 1 to 9 days, skipping exactly 5 so that no shipped_at
+# lands on the delay boundary. Days 6, 7, 8 and 9 all occur, giving the
+# complaint rule a supply of genuinely delayed orders.
+SHIPPED_DAY_OFFSETS = [
+    day for day in range(1, 10) if day != DELAY_THRESHOLD_DAYS
 ]
 
 # Order counts per status. Delivered and returned orders carry delivered_at
@@ -202,6 +210,7 @@ def build(db_path=DEFAULT_DB_PATH):
     order_rows = []
     item_rows = []
     coupon_use_rows = []
+    shipped_position = 0
 
     for index, status in enumerate(statuses):
         order_id = f"ORD-{1001 + index}"
@@ -228,7 +237,14 @@ def build(db_path=DEFAULT_DB_PATH):
             delivered_at = iso(delivered_moment)
             shipped_at = iso(shipped_moment)
         elif status == "shipped":
-            shipped_moment = FIXED_CLOCK - timedelta(days=rng.randint(1, 4))
+            # The day comes from the fixed cycle, but the original random draw
+            # is still consumed so every other seeded value stays unchanged.
+            rng.randint(1, 4)
+            offset = SHIPPED_DAY_OFFSETS[
+                shipped_position % len(SHIPPED_DAY_OFFSETS)
+            ]
+            shipped_position += 1
+            shipped_moment = FIXED_CLOCK - timedelta(days=offset)
             created_moment = shipped_moment - timedelta(days=1)
             shipped_at = iso(shipped_moment)
         elif status == "cancelled":

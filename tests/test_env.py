@@ -13,7 +13,8 @@ if str(ROOT) not in sys.path:
 from env import seed, tools
 from env.shop import FIXED_CLOCK, Shop
 
-REFUND_WINDOW_DAYS = 7
+REFUND_WINDOW_DAYS = seed.REFUND_WINDOW_DAYS
+DELAY_THRESHOLD_DAYS = seed.DELAY_THRESHOLD_DAYS
 
 
 @pytest.fixture(scope="module")
@@ -117,6 +118,27 @@ class TestSeedDeterminism:
             assert abs((delivered - boundary).total_seconds()) >= 12 * 3600, (
                 f"{order['order_id']} sits within 12 hours of the refund boundary"
             )
+
+    def test_shipped_orders_clear_the_delay_boundary(self, shop):
+        boundary = FIXED_CLOCK - timedelta(days=DELAY_THRESHOLD_DAYS)
+        ages = []
+        for order in shop.snapshot()["orders"]:
+            if order["status"] != "shipped":
+                continue
+            shipped = datetime.fromisoformat(order["shipped_at"])
+            assert abs((shipped - boundary).total_seconds()) >= 24 * 3600, (
+                f"{order['order_id']} sits within 24 hours of the delay boundary"
+            )
+            ages.append((FIXED_CLOCK - shipped).days)
+        assert sum(1 for age in ages if age > DELAY_THRESHOLD_DAYS) >= 5
+        assert {6, 7, 8, 9}.issubset(set(ages))
+        assert max(ages) <= 9
+        assert DELAY_THRESHOLD_DAYS not in ages
+
+    def test_shipped_at_precedes_delivered_at(self, shop):
+        for order in shop.snapshot()["orders"]:
+            if order["shipped_at"] and order["delivered_at"]:
+                assert order["shipped_at"] < order["delivered_at"], order["order_id"]
 
     def test_one_expired_coupon(self, shop):
         today = FIXED_CLOCK.date().isoformat()

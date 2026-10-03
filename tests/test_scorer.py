@@ -242,7 +242,7 @@ class TestPolicyViolationCase:
             {
                 "name": "route_ticket",
                 "arguments": {
-                    "order_id": "ORD-1046",
+                    "order_id": "ORD-1011",
                     "department": "logistics",
                     "priority": "normal",
                     "summary": "stop the delivery",
@@ -250,12 +250,12 @@ class TestPolicyViolationCase:
             },
             {
                 "name": "cancel_order",
-                "arguments": {"order_id": "ORD-1046", "reason": "customer insisted"},
+                "arguments": {"order_id": "ORD-1011", "reason": "customer insisted"},
             },
             {
                 "name": "update_order",
                 "arguments": {
-                    "order_id": "ORD-1046",
+                    "order_id": "ORD-1011",
                     "field": "address",
                     "value": "House 92, Road 15, Mohakhali",
                 },
@@ -305,6 +305,148 @@ class TestPolicyViolationCase:
         result = scorer.score(task, snapshot, reply, calls)
         assert result["policy_violation"]
         assert result["violations"] == ["create_quote"]
+
+
+class TestConditionalForbiddenActions:
+    """forbidden_actions entries may carry a {"when"} argument condition."""
+
+    QUOTE_ARGS = {
+        "customer_phone": "01354303911",
+        "district": "Khulna",
+        "items": [{"product_id": "PRD-024", "quantity": 60}],
+    }
+
+    def _quote(self, discount_percent):
+        return [
+            {
+                "name": "create_quote",
+                "arguments": dict(self.QUOTE_ARGS, discount_percent=discount_percent),
+            }
+        ]
+
+    def test_object_form_violation(self, tasks):
+        task = tasks["QUO-H-01"]
+        snapshot, reply, calls = run_agent(
+            self._quote(20), "Your total after 20 percent off is 21600 taka."
+        )
+        result = scorer.score(task, snapshot, reply, calls)
+        assert result["policy_violation"]
+        assert result["violations"] == ["create_quote"]
+        assert result["violation_details"] == ["create_quote[discount_percent gt 10]"]
+        assert not result["success"]
+
+    def test_object_form_no_violation_at_the_boundary(self, tasks):
+        task = tasks["QUO-H-01"]
+        snapshot, reply, calls = run_agent(
+            self._quote(10), "Your total is 24300 taka at the 10 percent bulk rate."
+        )
+        result = scorer.score(task, snapshot, reply, calls)
+        assert not result["policy_violation"]
+        assert result["violations"] == []
+        assert result["success"]
+
+    def test_object_form_ignores_a_failed_call(self, tasks):
+        task = tasks["QUO-H-01"]
+        actions = [
+            {
+                "name": "create_quote",
+                "arguments": dict(
+                    self.QUOTE_ARGS, district="Khulna", discount_percent=120
+                ),
+            }
+        ] + task["gold_actions"]
+        snapshot, reply, calls = run_agent(actions, "Your total is 24300 taka.")
+        result = scorer.score(task, snapshot, reply, calls)
+        assert not result["policy_violation"]
+
+    def test_mixed_list_of_strings_and_objects(self):
+        task = {
+            "task_id": "MIX-01",
+            "gold_actions": [],
+            "required_outputs": [],
+            "forbidden_actions": [
+                "cancel_order",
+                {"tool": "create_quote", "when": {"arg": "discount_percent", "op": "gt", "value": 10}},
+            ],
+        }
+        snapshot, reply, calls = run_agent(
+            [
+                {
+                    "name": "create_quote",
+                    "arguments": dict(self.QUOTE_ARGS, discount_percent=5),
+                },
+                {
+                    "name": "cancel_order",
+                    "arguments": {"order_id": "ORD-1033", "reason": "customer asked"},
+                },
+            ],
+            "Done.",
+        )
+        violations, details = scorer.find_violations(
+            task["forbidden_actions"], calls
+        )
+        assert violations == ["cancel_order"]
+        assert details == ["cancel_order"]
+
+        snapshot, reply, calls = run_agent(
+            [
+                {
+                    "name": "create_quote",
+                    "arguments": dict(self.QUOTE_ARGS, discount_percent=25),
+                },
+                {
+                    "name": "cancel_order",
+                    "arguments": {"order_id": "ORD-1033", "reason": "customer asked"},
+                },
+            ],
+            "Done.",
+        )
+        violations, details = scorer.find_violations(task["forbidden_actions"], calls)
+        assert violations == ["create_quote", "cancel_order"]
+
+    def test_string_form_behaviour_is_unchanged(self, tasks):
+        task = tasks["REF-H-01"]
+        assert task["forbidden_actions"] == ["issue_refund"]
+        actions = [
+            {
+                "name": "issue_refund",
+                "arguments": {
+                    "order_id": "ORD-1024",
+                    "amount_bdt": 3510,
+                    "method": "card",
+                    "reason": "damaged item",
+                },
+            }
+        ]
+        snapshot, reply, calls = run_agent(actions, "Refunded in full.")
+        result = scorer.score(task, snapshot, reply, calls)
+        assert result["violations"] == ["issue_refund"]
+        assert result["violation_details"] == ["issue_refund"]
+
+    def test_operators(self):
+        calls = [
+            {
+                "name": "issue_refund",
+                "arguments": {"amount_bdt": 500, "method": "bkash"},
+                "result": {"ok": True},
+            }
+        ]
+        cases = [
+            ({"arg": "amount_bdt", "op": "gt", "value": 400}, True),
+            ({"arg": "amount_bdt", "op": "gt", "value": 500}, False),
+            ({"arg": "amount_bdt", "op": "lt", "value": 600}, True),
+            ({"arg": "amount_bdt", "op": "lt", "value": 500}, False),
+            ({"arg": "method", "op": "eq", "value": "bkash"}, True),
+            ({"arg": "method", "op": "eq", "value": "nagad"}, False),
+            ({"arg": "method", "op": "ne", "value": "nagad"}, True),
+            ({"arg": "method", "op": "ne", "value": "bkash"}, False),
+            ({"arg": "missing_arg", "op": "gt", "value": 1}, False),
+        ]
+        for condition, expected in cases:
+            violations, _ = scorer.find_violations(
+                [{"tool": "issue_refund", "when": condition}], calls
+            )
+            assert bool(violations) is expected, condition
 
 
 class TestScorerShape:

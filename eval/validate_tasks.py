@@ -68,6 +68,11 @@ def check_schema(tasks):
         if not str(task.get("notes", "")).strip():
             problems.append(f"{label}: notes is empty")
 
+        problems.extend(check_forbidden_shape(label, task.get("forbidden_actions", [])))
+
+        rules = scorer.normalize_forbidden(task.get("forbidden_actions", []))
+        unconditional = {tool for tool, condition in rules if condition is None}
+
         for action in task.get("gold_actions", []):
             if not isinstance(action, dict):
                 problems.append(f"{label}: gold action is not an object")
@@ -77,17 +82,84 @@ def check_schema(tasks):
                 problems.append(
                     f"{label}: gold action {name!r} is not a write tool"
                 )
-            if not isinstance(action.get("arguments", {}), dict):
+            arguments = action.get("arguments", {})
+            if not isinstance(arguments, dict):
                 problems.append(f"{label}: gold action {name} arguments is not an object")
-            if name in task.get("forbidden_actions", []):
+                continue
+            if name in unconditional:
                 problems.append(
                     f"{label}: {name} appears in gold_actions and forbidden_actions"
                 )
+            for tool, condition in rules:
+                if condition is None or tool != name:
+                    continue
+                if scorer._condition_holds(condition, arguments):
+                    problems.append(
+                        f"{label}: gold action {name} satisfies its own forbidden"
+                        f" condition {scorer.describe_condition(tool, condition)}"
+                    )
 
-        for name in task.get("forbidden_actions", []):
-            if name not in scorer.WRITE_TOOLS:
-                problems.append(f"{label}: forbidden action {name!r} is not a write tool")
+    return problems
 
+
+def check_forbidden_shape(label, forbidden_actions):
+    """forbidden_actions holds tool names, or {tool, when} condition objects."""
+    problems = []
+    for entry in forbidden_actions:
+        if isinstance(entry, str):
+            if entry not in scorer.WRITE_TOOLS:
+                problems.append(
+                    f"{label}: forbidden action {entry!r} is not a write tool"
+                )
+            continue
+        if not isinstance(entry, dict):
+            problems.append(
+                f"{label}: forbidden action must be a string or an object,"
+                f" found {type(entry).__name__}"
+            )
+            continue
+
+        extra = set(entry) - {"tool", "when"}
+        if extra:
+            problems.append(
+                f"{label}: forbidden action has unknown keys {sorted(extra)}"
+            )
+        tool = entry.get("tool")
+        if tool not in scorer.WRITE_TOOLS:
+            problems.append(f"{label}: forbidden action {tool!r} is not a write tool")
+
+        if "when" not in entry:
+            continue
+        condition = entry["when"]
+        if not isinstance(condition, dict):
+            problems.append(f"{label}: forbidden action {tool} when is not an object")
+            continue
+        condition_extra = set(condition) - {"arg", "op", "value"}
+        if condition_extra:
+            problems.append(
+                f"{label}: forbidden action {tool} when has unknown keys"
+                f" {sorted(condition_extra)}"
+            )
+        if not isinstance(condition.get("arg"), str) or not condition["arg"].strip():
+            problems.append(
+                f"{label}: forbidden action {tool} when needs a non-empty arg name"
+            )
+        if condition.get("op") not in scorer.CONDITION_OPS:
+            problems.append(
+                f"{label}: forbidden action {tool} when op"
+                f" {condition.get('op')!r} is not one of"
+                f" {', '.join(scorer.CONDITION_OPS)}"
+            )
+        if "value" not in condition:
+            problems.append(f"{label}: forbidden action {tool} when needs a value")
+        elif condition["op"] in ("gt", "lt") and (
+            isinstance(condition["value"], bool)
+            or not isinstance(condition["value"], (int, float))
+        ):
+            problems.append(
+                f"{label}: forbidden action {tool} when op {condition['op']}"
+                " needs a numeric value"
+            )
     return problems
 
 
