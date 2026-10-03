@@ -1,7 +1,7 @@
 """Environment tests: seed determinism, tool behaviour, and policy permissiveness."""
 
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -107,6 +107,16 @@ class TestSeedDeterminism:
     def test_refund_window_straddles_the_clock(self, shop):
         assert _delivered_order(shop, inside_window=True) is not None
         assert _delivered_order(shop, inside_window=False) is not None
+
+    def test_no_delivery_near_the_refund_boundary(self, shop):
+        boundary = FIXED_CLOCK - timedelta(days=REFUND_WINDOW_DAYS)
+        for order in shop.snapshot()["orders"]:
+            if not order["delivered_at"]:
+                continue
+            delivered = datetime.fromisoformat(order["delivered_at"])
+            assert abs((delivered - boundary).total_seconds()) >= 12 * 3600, (
+                f"{order['order_id']} sits within 12 hours of the refund boundary"
+            )
 
     def test_one_expired_coupon(self, shop):
         today = FIXED_CLOCK.date().isoformat()

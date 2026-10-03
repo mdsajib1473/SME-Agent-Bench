@@ -538,6 +538,10 @@ TOPIC_ALIASES = {
     "escalation": "complaint_routing",
     "verification": "identity",
     "identification": "identity",
+    "subtotal": "definitions",
+    "clock": "definitions",
+    "time": "definitions",
+    "definition": "definitions",
 }
 
 

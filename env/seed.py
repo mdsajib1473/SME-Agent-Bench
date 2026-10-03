@@ -79,6 +79,14 @@ PRODUCTS = [
 
 TIERS = ["regular", "silver", "gold"]
 
+REFUND_WINDOW_DAYS = 7
+
+# Day 7 is skipped so that no delivered_at lands within 12 hours of the refund
+# window boundary. Every delivered order is at least 24 hours clear of it.
+DELIVERED_DAY_OFFSETS = [
+    day for day in range(1, 21) if day != REFUND_WINDOW_DAYS
+]
+
 # Order counts per status. Delivered and returned orders carry delivered_at
 # dates spread across the 20 days before the fixed clock, so the 7-day refund
 # window contains some of them and excludes the rest.
@@ -184,9 +192,10 @@ def build(db_path=DEFAULT_DB_PATH):
     for status in statuses:
         if status in ("delivered", "returned"):
             delivered_day_cycle.append(status)
-    # Spread delivered_at evenly across days 1 to 20 before the clock.
+    # Spread delivered_at evenly across the allowed days before the clock.
     delivered_offsets = [
-        1 + (position % 20) for position in range(len(delivered_day_cycle))
+        DELIVERED_DAY_OFFSETS[position % len(DELIVERED_DAY_OFFSETS)]
+        for position in range(len(delivered_day_cycle))
     ]
     offset_iterator = iter(delivered_offsets)
 
