@@ -1,0 +1,10 @@
+openai
+nvidia-ml-py
+pyyaml
+pandas
+numpy
+scipy
+statsmodels
+matplotlib
+pytest
+tqdm

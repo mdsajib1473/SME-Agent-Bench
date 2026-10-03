@@ -1,0 +1,15 @@
+ollama_base_url: http://localhost:11434/v1
+
+models:
+  - qwen2.5-7b-8k
+  - qwen2.5-14b-8k
+
+temperature: 0.3
+
+runs_per_task: 3
+seeds: [0, 1, 2]
+
+max_llm_calls_per_task: 20
+request_timeout_s: 180
+
+fixed_clock: "2026-10-01T10:00:00+06:00"
