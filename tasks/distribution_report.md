@@ -65,7 +65,7 @@ Tasks with 3 or more write actions in a fixed order: 7. Of the 20 hard tasks, 7 
 
 ## Order id reuse
 
-54 distinct order ids appear across the instructions. Reuse counts: 1 task(s): 41 ids, 2 task(s): 13 ids.
+55 distinct order ids appear across the instructions. Reuse counts: 1 task(s): 43 ids, 2 task(s): 12 ids.
 
 No order id appears in more than 3 tasks.
 

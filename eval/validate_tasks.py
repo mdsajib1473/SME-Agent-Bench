@@ -8,7 +8,9 @@ pass only the traps whose correct behaviour is to do nothing and say so.
 """
 
 import json
+import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -209,6 +211,81 @@ def outputs_derivable_check(tasks, seed_corpus):
     return problems
 
 
+ORDER_IN_TEXT = re.compile(r"ORD-\d{4}")
+PHONE_IN_TEXT = re.compile(r"\b01\d{9}\b")
+
+# Phrases a reviewer uses in notes to mark a deliberate identity mismatch.
+IDENTITY_TRAP_MARKERS = (
+    "does not match",
+    "identity fails",
+    "not the number registered",
+)
+
+
+def _seed_owners():
+    with Shop() as shop:
+        rows = shop.connection.execute(
+            "SELECT o.order_id, c.phone, c.name FROM orders o"
+            " JOIN customers c ON c.customer_id = o.customer_id"
+        ).fetchall()
+    return {row["order_id"]: (row["phone"], row["name"]) for row in rows}
+
+
+def is_identity_trap(task):
+    notes = str(task.get("notes", "")).lower()
+    return bool(task.get("is_trap")) and any(
+        marker in notes for marker in IDENTITY_TRAP_MARKERS
+    )
+
+
+def ownership_check(tasks):
+    """Every order named in an instruction must carry a phone that owns it."""
+    owners = _seed_owners()
+    failures = []
+    intended = []
+    claims = defaultdict(dict)
+
+    for task in tasks:
+        label = task.get("task_id")
+        instruction = str(task.get("instruction", ""))
+        phones = set(PHONE_IN_TEXT.findall(instruction))
+        trap = is_identity_trap(task)
+
+        for order_id in sorted(set(ORDER_IN_TEXT.findall(instruction))):
+            if order_id not in owners:
+                failures.append(f"{label}: instruction names unknown order {order_id}")
+                continue
+            owner_phone, owner_name = owners[order_id]
+            # An identity trap gives a wrong phone on purpose, so it cannot
+            # take part in the cross-task consistency comparison.
+            if not trap:
+                claims[order_id][label] = frozenset(phones)
+
+            if owner_phone in phones:
+                continue
+            detail = (
+                f"{label}: {order_id} belongs to {owner_name} on {owner_phone},"
+                f" but the instruction gives {sorted(phones) or ['no phone']}"
+            )
+            (intended if trap else failures).append(detail)
+
+    for order_id, per_task in sorted(claims.items()):
+        if len(per_task) < 2:
+            continue
+        labels = sorted(per_task)
+        shared = frozenset.intersection(*per_task.values()) if per_task else frozenset()
+        if not shared:
+            spelled = ", ".join(
+                f"{label} gives {sorted(per_task[label]) or ['no phone']}"
+                for label in labels
+            )
+            failures.append(
+                f"{order_id} is used with different phones: {spelled}"
+            )
+
+    return failures, intended
+
+
 def run_oracle(task):
     """Perform exactly the gold actions and quote every required output."""
     with Shop() as shop:
@@ -257,10 +334,17 @@ def main(argv=None):
     problems.extend(replay_check(tasks))
     problems.extend(outputs_derivable_check(tasks, _seed_corpus()))
 
+    ownership_failures, intended_mismatches = ownership_check(tasks)
+    problems.extend(ownership_failures)
+
     if problems:
         print("\nschema and replay problems:")
         for problem in problems:
             print(f"  {problem}")
+
+    print(f"\nintended identity mismatches: {len(intended_mismatches)}")
+    for note in intended_mismatches:
+        print(f"  {note}")
 
     print("\noracle agent:")
     oracle_failures = []
