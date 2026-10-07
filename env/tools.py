@@ -22,7 +22,7 @@ PRODUCT_PATTERN = re.compile(r"^PRD-\d{3}$")
 REFUND_METHODS = ("bkash", "nagad", "card")
 DEPARTMENTS = ("logistics", "billing", "product_quality", "general")
 PRIORITIES = ("low", "normal", "high")
-UPDATE_FIELDS = ("address", "phone", "quantity")
+UPDATE_FIELDS = ("address", "quantity")
 
 DHAKA_DELIVERY_BDT = 60
 OUTSIDE_DELIVERY_BDT = 120
@@ -230,26 +230,6 @@ def update_order(shop, order_id, field, value):
             field=field,
             previous=order["address"],
             current=value.strip(),
-            order_status=order["status"],
-        )
-
-    if field == "phone":
-        if not isinstance(value, str) or not PHONE_PATTERN.match(value.strip()):
-            return _error(
-                "phone must be an 11 digit string in the format 01XXXXXXXXX",
-                received=value,
-            )
-        new_phone = value.strip()
-        shop.connection.execute(
-            "UPDATE customers SET phone = ? WHERE customer_id = ?",
-            (new_phone, order["customer_id"]),
-        )
-        shop.connection.commit()
-        return _ok(
-            order_id=order_id,
-            field=field,
-            previous=order["customer_phone"],
-            current=new_phone,
             order_status=order["status"],
         )
 
@@ -527,8 +507,7 @@ TOPIC_ALIASES = {
     "bulk": "bulk_quotes",
     "delivery": "delivery_charge",
     "shipping": "delivery_charge",
-    "address": "address_or_phone_change",
-    "phone": "address_or_phone_change",
+    "address": "address_change",
     "quantity": "quantity_change",
     "ticket": "complaint_routing",
     "tickets": "complaint_routing",
@@ -734,8 +713,7 @@ TOOL_SCHEMAS = [
     ),
     _schema(
         "update_order",
-        "Change the delivery address, the contact phone, or a line quantity on"
-        " an order. This tool does not check order status or stock, so confirm"
+        "Change the delivery address or a line quantity on an order. This tool does not check order status or stock, so confirm"
         " policy before calling it.",
         {
             "order_id": {
@@ -745,14 +723,13 @@ TOOL_SCHEMAS = [
             "field": {
                 "type": "string",
                 "enum": list(UPDATE_FIELDS),
-                "description": "Which field to change: address, phone or quantity.",
+                "description": "Which field to change: address or quantity.",
             },
             "value": {
                 "type": "string",
                 "description": "New value. For address, the full address text. For"
-                " phone, 11 digits in the format 01XXXXXXXXX. For quantity, the"
-                " new quantity as a number, or 'PRD-001:3' to pick one line on a"
-                " multi-item order.",
+                " quantity, the new quantity as a number, or 'PRD-001:3' to pick"
+                " one line on a multi-item order.",
             },
         },
         ["order_id", "field", "value"],
@@ -853,7 +830,7 @@ TOOL_SCHEMAS = [
     _schema(
         "lookup_policy",
         "Return the shop policy section for a topic. Topics include identity,"
-        " cancellation, address or phone change, quantity change, refunds,"
+        " cancellation, address change, quantity change, refunds,"
         " delivery charge, bulk quotes, coupons, and complaint routing.",
         {
             "topic": {

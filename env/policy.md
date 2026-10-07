@@ -14,6 +14,12 @@ The subtotal of an order or a quote is the sum of its line items, each line
 being unit price multiplied by quantity. The subtotal is counted BEFORE any
 discount, any coupon, and the delivery charge.
 
+When a coupon or bulk discount does not come to a whole number of taka, the
+discount amount (subtotal times percent divided by 100) is rounded to the
+nearest whole taka with an exact half going to the even neighbour, so 141.5
+becomes 142 and 140.5 becomes 140, and that rounded discount is subtracted from
+the subtotal before the delivery charge is added.
+
 The current time is fixed at 2026-10-01 10:00 Asia/Dhaka. Measure every age and
 every deadline against that instant, not against the real clock.
 
@@ -41,10 +47,10 @@ damage or a delay of more than 5 days, so the delivery can be stopped or
 returned. If the order is already delivered, cancelled, or returned, refuse and
 open no ticket.
 
-## Address or Phone Change
+## Address Change
 
-The delivery address or the contact phone number on an order may be changed only
-before the order is shipped, meaning while the status is pending or confirmed.
+The delivery address on an order may be changed only before the order is
+shipped, meaning while the status is pending or confirmed.
 
 If the status is shipped, delivered, cancelled, or returned, refuse the change
 and take no action. Do not open a ticket for this.

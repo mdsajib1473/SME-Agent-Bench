@@ -27,6 +27,12 @@ Always call tools through `.venv\Scripts\python.exe`, never bare `python`.
 If `ollama` is not on PATH in the current session, use
 `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`.
 
+## Known limitations
+
+- get_order computes the subtotal as total minus delivery, so after a coupon is
+  applied a later quantity change starts from the discounted amount. No current
+  task combines the two. Do not fix it.
+
 ## Layout
 
     env/        shop database, seed data, policy, tools

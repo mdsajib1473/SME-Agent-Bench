@@ -231,13 +231,18 @@ class TestToolsValidInput:
         assert result["ok"]
         assert result["current"] == "House 9, Road 3, Mirpur"
 
-    def test_update_order_phone(self, shop, registry):
+    def test_update_order_rejects_phone_field(self, shop, registry):
         order = _order_with_status(shop, "confirmed")
         result = registry["update_order"](
             order_id=order["order_id"], field="phone", value="01711111111"
         )
-        assert result["ok"]
-        assert result["current"] == "01711111111"
+        assert not result["ok"]
+        stored = _one(
+            shop,
+            "SELECT phone FROM customers WHERE customer_id = ?",
+            (order["customer_id"],),
+        )
+        assert stored["phone"] == order["phone"]
 
     def test_update_order_quantity(self, shop, registry):
         order = _single_item_order(shop, "pending")
@@ -360,6 +365,7 @@ class TestToolsValidInput:
         assert result["ok"]
         assert "7 days" in result["section"]
         assert registry["lookup_policy"](topic="cancel")["topic"] == "Cancellation"
+        assert registry["lookup_policy"](topic="address")["topic"] == "Address Change"
         assert registry["lookup_policy"](topic="delivery")["ok"]
         assert registry["lookup_policy"](topic="complaint routing")["ok"]
 
@@ -405,12 +411,6 @@ class TestToolsInvalidInput:
         order = _order_with_status(shop, "pending")
         assert not registry["update_order"](
             order_id=order["order_id"], field="district", value="Dhaka"
-        )["ok"]
-
-    def test_update_order_bad_phone_value(self, shop, registry):
-        order = _order_with_status(shop, "pending")
-        assert not registry["update_order"](
-            order_id=order["order_id"], field="phone", value="017"
         )["ok"]
 
     def test_update_order_bad_quantity_value(self, shop, registry):
