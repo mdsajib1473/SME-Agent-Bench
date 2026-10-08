@@ -11,8 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agents.base import Agent
-from env.tools import TOOL_SCHEMAS
+from agents.base import ALL_TOOL_NAMES, Agent, schemas_for
 
 MAX_ITERATIONS = 15
 
@@ -26,26 +25,18 @@ ROLE_INSTRUCTIONS = (
 
 class ReActAgent(Agent):
     name = "react"
-    role_instructions = ROLE_INSTRUCTIONS
+    tools_by_role = {"react": ALL_TOOL_NAMES}
 
     def __init__(self, max_iterations=MAX_ITERATIONS):
         self.max_iterations = max_iterations
 
-    def _run(self, task, shop, llm, seed, prompt, trace):
-        messages = [
-            {"role": "system", "content": prompt.text},
-            {"role": "user", "content": task["instruction"]},
-        ]
-        trace.message("system", prompt.text)
-        trace.message("user", task["instruction"])
-
-        for _ in range(self.max_iterations):
-            result = llm.chat(messages, tools=TOOL_SCHEMAS, seed=seed)
-            trace.llm_call(result)
-            messages.append(result.message)
-            if not result.tool_calls:
-                return result.content, "final_answer"
-            messages.extend(
-                self.execute_tool_calls(shop, llm, result.tool_calls, trace)
-            )
+    def _run(self, ctx):
+        messages = ctx.open_conversation(
+            self.name, ROLE_INSTRUCTIONS, ctx.task["instruction"]
+        )
+        loop = ctx.tool_loop(
+            messages, schemas_for(ALL_TOOL_NAMES), self.max_iterations, agent=self.name
+        )
+        if loop.finished:
+            return loop.reply, "final_answer"
         return "", "max_iterations"

@@ -55,8 +55,9 @@ def build_shared_prompt(policy_text):
     )
 
 
-def build_system_prompt(role_instructions=None, policy_path=POLICY_PATH):
-    policy_text = load_policy(policy_path)
+def build_system_prompt(role_instructions=None, policy_text=None, policy_path=POLICY_PATH):
+    if policy_text is None:
+        policy_text = load_policy(policy_path)
     shared = build_shared_prompt(policy_text)
     text = shared
     if role_instructions:

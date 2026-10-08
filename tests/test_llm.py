@@ -1,9 +1,7 @@
 """LLM client tests with a fake endpoint: malformed calls, text calls, budget."""
 
-import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +14,7 @@ from agents.prompts import build_system_prompt, load_policy, policy_sha256
 from agents.react import ReActAgent
 from env.shop import Shop
 from env.tools import TOOL_SCHEMAS
+from tests.fakes import FakeClient, native_call, response
 
 CONFIG = {
     "ollama_base_url": "http://fake/v1",
@@ -23,41 +22,6 @@ CONFIG = {
     "max_llm_calls_per_task": 3,
     "request_timeout_s": 5,
 }
-
-
-def native_call(name, arguments, call_id="call_x"):
-    if not isinstance(arguments, str):
-        arguments = json.dumps(arguments)
-    return SimpleNamespace(
-        id=call_id,
-        type="function",
-        function=SimpleNamespace(name=name, arguments=arguments),
-    )
-
-
-def response(content="", tool_calls=None, prompt_tokens=100, completion_tokens=10):
-    message = SimpleNamespace(content=content, tool_calls=tool_calls)
-    return SimpleNamespace(
-        choices=[SimpleNamespace(message=message, finish_reason="stop")],
-        usage=SimpleNamespace(
-            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
-        ),
-    )
-
-
-class FakeClient:
-    """Returns scripted responses in order and records every request."""
-
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.requests = []
-        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
-
-    def _create(self, **request):
-        self.requests.append(dict(request, messages=list(request["messages"])))
-        if not self.responses:
-            raise AssertionError("fake client ran out of scripted responses")
-        return self.responses.pop(0)
 
 
 def make_client(responses, max_calls=3):
@@ -343,3 +307,36 @@ def test_energy_meter_without_nvml(monkeypatch):
     assert meter.energy_wh is None
     assert meter.net_energy_wh(10.0) is None
     assert energy.measure_idle_power(seconds=0) is None
+
+
+class TestModelReset:
+    def test_unloads_waits_then_warms_up(self, monkeypatch):
+        from agents import llm as llm_module
+
+        posts = []
+        loaded = iter([True, True, False])
+        monkeypatch.setattr(llm_module, "ollama_post", lambda url, payload, timeout: posts.append((url, payload)) or {})
+        monkeypatch.setattr(llm_module, "_model_loaded", lambda native_url, model, timeout: next(loaded))
+        monkeypatch.setattr(llm_module, "UNLOAD_POLL_S", 0)
+
+        seconds = llm_module.reset_model_state("m", dict(CONFIG))
+        assert seconds >= 0
+        assert posts[0] == ("http://fake/api/generate", {"model": "m", "keep_alive": 0})
+        assert posts[1][0] == "http://fake/api/generate"
+        assert posts[1][1]["prompt"] == llm_module.RESET_WARMUP["prompt"]
+        assert posts[1][1]["options"]["seed"] == 0
+        assert len(posts) == 2
+
+    def test_timeout_is_flagged_in_metadata(self, shop):
+        import httpx2
+        import openai
+
+        llm, fake = make_client([], max_calls=2)
+
+        def time_out(**request):
+            raise openai.APITimeoutError(request=httpx2.Request("POST", "http://fake/v1"))
+
+        fake.chat.completions.create = time_out
+        result = ReActAgent().run({"task_id": "T", "instruction": "hi"}, shop, llm, seed=0)
+        assert result.metadata["stop_reason"] == "llm_error"
+        assert result.metadata["llm_timeout"] is True

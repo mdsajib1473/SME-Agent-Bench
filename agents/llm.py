@@ -8,7 +8,7 @@ keeps the arms comparable.
 
 Counter meanings:
     llm_calls             requests sent to the model, including failed ones
-    tool_calls            tool calls executed against the shop (native and text)
+    tool_calls            shop tool calls executed (native and text)
     malformed_tool_calls  tool calls rejected before execution
     text_tool_calls       tool calls recovered from message text, executed or not
 """
@@ -17,6 +17,7 @@ import json
 import re
 import sys
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,10 +49,76 @@ class BudgetExceeded(Exception):
 class LLMError(Exception):
     """The model endpoint failed: connection, timeout, or HTTP error."""
 
+    def __init__(self, message, timeout=False):
+        super().__init__(message)
+        self.timeout = timeout
+
 
 def load_config(path=CONFIG_PATH):
     with Path(path).open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+RESET_WARMUP = {"prompt": "hi", "options": {"num_predict": 1, "temperature": 0, "seed": 0}}
+UNLOAD_WAIT_S = 60
+UNLOAD_POLL_S = 0.1
+
+
+def native_base(base_url):
+    """Config holds the OpenAI-compatible path; the native API sits one level up."""
+    return base_url.rstrip("/").removesuffix("/v1")
+
+
+def ollama_get(url, timeout):
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def ollama_post(url, payload, timeout):
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _model_loaded(native_url, model, timeout):
+    wanted = model.removesuffix(":latest")
+    running = ollama_get(f"{native_url}/api/ps", timeout)
+    return any(
+        str(entry.get(key, "")).removesuffix(":latest") == wanted
+        for entry in running.get("models", [])
+        for key in ("name", "model")
+    )
+
+
+def reset_model_state(model, config=None):
+    """Unload the model from Ollama, then load it with one fixed warm-up request.
+
+    Unloading drops the prompt cache, so every run starts from the same cache
+    state; Ollama reuses cached prefixes across requests, and a different
+    cached prefix changes the output even with the same seed. Returns seconds.
+    """
+    config = config if config is not None else load_config()
+    native_url = native_base(config["ollama_base_url"])
+    timeout = config["request_timeout_s"]
+    started = time.perf_counter()
+
+    ollama_post(f"{native_url}/api/generate", {"model": model, "keep_alive": 0}, timeout)
+    deadline = started + UNLOAD_WAIT_S
+    while _model_loaded(native_url, model, timeout):
+        if time.perf_counter() > deadline:
+            raise RuntimeError(f"{model} still loaded {UNLOAD_WAIT_S} s after unload request")
+        time.sleep(UNLOAD_POLL_S)
+
+    ollama_post(
+        f"{native_url}/api/generate",
+        {"model": model, "stream": False, **RESET_WARMUP},
+        timeout,
+    )
+    return time.perf_counter() - started
 
 
 @dataclass
@@ -169,6 +236,9 @@ class LLMClient:
         self.model = model
         self.temperature = self.config["temperature"]
         self.max_calls = int(self.config["max_llm_calls_per_task"])
+        # A runaway generation would otherwise run to the request timeout, and
+        # Ollama keeps generating after the client gives up, skewing the next run.
+        self.max_tokens = self.config.get("max_tokens_per_call")
         if client is None:
             from openai import OpenAI
 
@@ -208,6 +278,8 @@ class LLMClient:
             "temperature": self.temperature,
             "extra_body": {"seed": seed},
         }
+        if self.max_tokens:
+            request["max_tokens"] = int(self.max_tokens)
         if tools:
             request["tools"] = tools
 
@@ -217,7 +289,9 @@ class LLMClient:
         except Exception as error:
             self.totals["llm_latency_s"] += time.perf_counter() - started
             if _is_openai_error(error):
-                raise LLMError(f"{type(error).__name__}: {error}") from error
+                raise LLMError(
+                    f"{type(error).__name__}: {error}", timeout=_is_timeout(error)
+                ) from error
             raise
         latency = time.perf_counter() - started
         self.totals["llm_latency_s"] += latency
@@ -310,13 +384,24 @@ class LLMClient:
             error=error,
         )
 
-    def execute_tool_call(self, shop, call):
-        """Run one parsed call against the shop, or return its parse error."""
+    def check_tool_call(self, call):
+        """Count one parsed call; return an error result if malformed, else None.
+
+        Calls handled outside the shop (the supervisor's delegate) go through
+        here so text and malformed counts stay comparable across architectures.
+        """
         if call.source == "text":
             self.totals["text_tool_calls"] += 1
         if call.malformed:
             self.totals["malformed_tool_calls"] += 1
             return {"ok": False, "error": f"malformed tool call: {call.error}"}
+        return None
+
+    def execute_tool_call(self, shop, call):
+        """Run one parsed call against the shop, or return its parse error."""
+        error = self.check_tool_call(call)
+        if error is not None:
+            return error
         self.totals["tool_calls"] += 1
         return shop_tools.call_tool(shop, call.name, call.arguments)
 
@@ -336,3 +421,11 @@ def _is_openai_error(error):
     except ImportError:
         return False
     return isinstance(error, openai.OpenAIError)
+
+
+def _is_timeout(error):
+    try:
+        import openai
+    except ImportError:
+        return False
+    return isinstance(error, openai.APITimeoutError)
