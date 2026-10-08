@@ -1,0 +1,338 @@
+"""Shared LLM client used by every architecture.
+
+One client wraps the OpenAI-compatible Ollama endpoint, enforces the per-task
+call budget, turns whatever the model emits into tool calls (native or written
+as JSON in the message text), executes them against the shop, and keeps the
+per-task totals. Routing every architecture through this one class is what
+keeps the arms comparable.
+
+Counter meanings:
+    llm_calls             requests sent to the model, including failed ones
+    tool_calls            tool calls executed against the shop (native and text)
+    malformed_tool_calls  tool calls rejected before execution
+    text_tool_calls       tool calls recovered from message text, executed or not
+"""
+
+import json
+import re
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from env import tools as shop_tools
+
+CONFIG_PATH = ROOT / "config.yaml"
+
+TOTAL_KEYS = (
+    "llm_calls",
+    "tool_calls",
+    "malformed_tool_calls",
+    "text_tool_calls",
+    "prompt_tokens",
+    "completion_tokens",
+    "llm_latency_s",
+)
+
+
+class BudgetExceeded(Exception):
+    """The per-task LLM call budget is spent."""
+
+
+class LLMError(Exception):
+    """The model endpoint failed: connection, timeout, or HTTP error."""
+
+
+def load_config(path=CONFIG_PATH):
+    with Path(path).open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict | None
+    raw_arguments: str
+    source: str
+    error: str | None = None
+
+    @property
+    def malformed(self):
+        return self.error is not None
+
+
+@dataclass
+class ChatResult:
+    message: dict
+    content: str
+    tool_calls: list = field(default_factory=list)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    latency_s: float = 0.0
+    finish_reason: str | None = None
+    call_index: int = 0
+
+
+def _parse_arguments(raw):
+    """Return (arguments_dict, error)."""
+    if isinstance(raw, dict):
+        return raw, None
+    if raw is None or raw == "":
+        return {}, None
+    if not isinstance(raw, str):
+        return None, f"tool arguments must be a JSON object, got {type(raw).__name__}"
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        return None, f"tool arguments are not valid JSON: {error}"
+    if not isinstance(value, dict):
+        return None, f"tool arguments must be a JSON object, got {type(value).__name__}"
+    return value, None
+
+
+def _raw_text(value):
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return repr(value)
+
+
+def _as_call_payload(payload):
+    """Return (name, raw_arguments) if payload looks like a tool call, else None."""
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("function"), dict):
+        payload = payload["function"]
+    name = payload.get("name")
+    if not isinstance(name, str):
+        return None
+    for key in ("arguments", "parameters"):
+        if key in payload:
+            return name, payload[key]
+    return None
+
+
+def find_text_tool_calls(content):
+    """Find tool calls written as JSON objects inside message text.
+
+    Returns (calls, residual_text) where calls is a list of (name, raw_arguments)
+    and residual_text is the content with those JSON objects and any tool_call
+    tags or empty code fences removed.
+    """
+    if not content or "{" not in content:
+        return [], content or ""
+    decoder = json.JSONDecoder()
+    calls = []
+    spans = []
+    index = 0
+    while True:
+        start = content.find("{", index)
+        if start < 0:
+            break
+        try:
+            payload, end = decoder.raw_decode(content, start)
+        except json.JSONDecodeError:
+            index = start + 1
+            continue
+        parsed = _as_call_payload(payload)
+        if parsed is not None:
+            calls.append(parsed)
+            spans.append((start, end))
+        index = end
+    if not calls:
+        return [], content
+
+    pieces = []
+    cursor = 0
+    for start, end in spans:
+        pieces.append(content[cursor:start])
+        cursor = end
+    pieces.append(content[cursor:])
+    residual = "".join(pieces)
+    residual = re.sub(r"</?tool_call>", "", residual)
+    residual = re.sub(r"```(?:json)?\s*```", "", residual)
+    return calls, residual.strip()
+
+
+class LLMClient:
+    def __init__(self, model, config=None, client=None):
+        self.config = config if config is not None else load_config()
+        self.model = model
+        self.temperature = self.config["temperature"]
+        self.max_calls = int(self.config["max_llm_calls_per_task"])
+        if client is None:
+            from openai import OpenAI
+
+            # Retries are disabled so every request the model sees is counted.
+            client = OpenAI(
+                base_url=self.config["ollama_base_url"],
+                api_key="ollama",
+                timeout=self.config["request_timeout_s"],
+                max_retries=0,
+            )
+        self.client = client
+        self.reset()
+
+    def reset(self):
+        """Start a new task: zero every counter and restore the full budget."""
+        self.totals = {key: 0 for key in TOTAL_KEYS}
+        self.totals["llm_latency_s"] = 0.0
+
+    @property
+    def calls_remaining(self):
+        return self.max_calls - self.totals["llm_calls"]
+
+    def snapshot_totals(self):
+        return dict(self.totals)
+
+    def chat(self, messages, tools=None, *, seed):
+        if self.totals["llm_calls"] >= self.max_calls:
+            raise BudgetExceeded(
+                f"budget of {self.max_calls} LLM calls per task is spent"
+            )
+        self.totals["llm_calls"] += 1
+        call_index = self.totals["llm_calls"]
+
+        request = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "extra_body": {"seed": seed},
+        }
+        if tools:
+            request["tools"] = tools
+
+        started = time.perf_counter()
+        try:
+            response = self.client.chat.completions.create(**request)
+        except Exception as error:
+            self.totals["llm_latency_s"] += time.perf_counter() - started
+            if _is_openai_error(error):
+                raise LLMError(f"{type(error).__name__}: {error}") from error
+            raise
+        latency = time.perf_counter() - started
+        self.totals["llm_latency_s"] += latency
+
+        usage = getattr(response, "usage", None)
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        self.totals["prompt_tokens"] += prompt_tokens
+        self.totals["completion_tokens"] += completion_tokens
+
+        choice = response.choices[0]
+        raw_message = choice.message
+        content = raw_message.content or ""
+        known = {entry["function"]["name"] for entry in tools or []}
+
+        tool_calls = []
+        for position, native in enumerate(getattr(raw_message, "tool_calls", None) or []):
+            tool_calls.append(
+                self._make_call(
+                    call_id=getattr(native, "id", None),
+                    name=native.function.name,
+                    raw=native.function.arguments,
+                    source="native",
+                    known=known,
+                    call_index=call_index,
+                    position=position,
+                )
+            )
+
+        history_content = content
+        if not tool_calls and tools:
+            text_calls, residual = find_text_tool_calls(content)
+            if text_calls:
+                history_content = residual
+                for position, (name, raw) in enumerate(text_calls):
+                    tool_calls.append(
+                        self._make_call(
+                            call_id=None,
+                            name=name,
+                            raw=raw,
+                            source="text",
+                            known=known,
+                            call_index=call_index,
+                            position=position,
+                        )
+                    )
+
+        message = {"role": "assistant", "content": history_content}
+        if tool_calls:
+            message["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        # Invalid JSON echoed back would make the endpoint reject the
+                        # next request, so malformed calls go back with empty arguments.
+                        "arguments": json.dumps(call.arguments, ensure_ascii=False)
+                        if call.arguments is not None
+                        else "{}",
+                    },
+                }
+                for call in tool_calls
+            ]
+
+        return ChatResult(
+            message=message,
+            content=content,
+            tool_calls=tool_calls,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_s=latency,
+            finish_reason=getattr(choice, "finish_reason", None),
+            call_index=call_index,
+        )
+
+    def _make_call(self, call_id, name, raw, source, known, call_index, position):
+        call_id = call_id or f"call_{call_index}_{position}"
+        name = name if isinstance(name, str) else ""
+        arguments, error = _parse_arguments(raw)
+        if name not in known:
+            error = f"unknown tool {name!r}; available tools: {', '.join(sorted(known))}"
+            arguments = None
+        return ToolCall(
+            id=call_id,
+            name=name,
+            arguments=arguments,
+            raw_arguments=_raw_text(raw),
+            source=source,
+            error=error,
+        )
+
+    def execute_tool_call(self, shop, call):
+        """Run one parsed call against the shop, or return its parse error."""
+        if call.source == "text":
+            self.totals["text_tool_calls"] += 1
+        if call.malformed:
+            self.totals["malformed_tool_calls"] += 1
+            return {"ok": False, "error": f"malformed tool call: {call.error}"}
+        self.totals["tool_calls"] += 1
+        return shop_tools.call_tool(shop, call.name, call.arguments)
+
+    @staticmethod
+    def tool_message(call, result):
+        return {
+            "role": "tool",
+            "tool_call_id": call.id,
+            "name": call.name,
+            "content": json.dumps(result, ensure_ascii=False, default=str),
+        }
+
+
+def _is_openai_error(error):
+    try:
+        import openai
+    except ImportError:
+        return False
+    return isinstance(error, openai.OpenAIError)
