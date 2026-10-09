@@ -286,12 +286,13 @@ class TestToolsValidInput:
         assert result["created_at"] == FIXED_CLOCK.isoformat()
 
     def test_refund_ids_are_sequential(self, shop, registry):
-        order = _delivered_order(shop, inside_window=True)
+        first_order = _delivered_order(shop, inside_window=True)
+        second_order = _delivered_order(shop, inside_window=False)
         first = registry["issue_refund"](
-            order_id=order["order_id"], amount_bdt=100, method="bkash", reason="one"
+            order_id=first_order["order_id"], amount_bdt=100, method="bkash", reason="one"
         )
         second = registry["issue_refund"](
-            order_id=order["order_id"], amount_bdt=100, method="bkash", reason="two"
+            order_id=second_order["order_id"], amount_bdt=100, method="bkash", reason="two"
         )
         assert [first["refund_id"], second["refund_id"]] == ["REF-0001", "REF-0002"]
 

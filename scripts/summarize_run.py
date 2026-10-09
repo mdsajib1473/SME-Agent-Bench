@@ -1,7 +1,9 @@
 """Summarize one run directory and project the time of a full run.
 
 Reads results/<tag>/runs.jsonl and meta.json and prints success, policy
-violations and timing per model and architecture, reset time and malformed tool
+violations, timing and wrong-script replies (any non-Latin letter or digit in
+the final reply to an English or Banglish task, read from the trace) per model
+and architecture, reset time and malformed tool
 call rate per model, GPU placement per model, and an estimate for a full run
 from the measured per-run totals (reset included).
 
@@ -13,12 +15,46 @@ Usage (PowerShell):
 import argparse
 import json
 import sys
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = ROOT / "results"
 GPU_HOURS_LIMIT = 30
+LATIN_SCRIPT_LANGUAGES = ("en", "banglish")
+# Non-ASCII letters that are not named LATIN but are normal in Latin text.
+LATIN_SAFE = set("µªº")
+
+
+def non_latin_scripts(text):
+    """Scripts of the non-Latin letters and digits in text, for example {'BENGALI', 'CJK'}."""
+    scripts = set()
+    for char in text or "":
+        if char.isascii() or char in LATIN_SAFE:
+            continue
+        category = unicodedata.category(char)
+        if not (category.startswith("L") or category == "Nd"):
+            continue
+        name = unicodedata.name(char, "UNKNOWN")
+        if "LATIN" not in name:
+            scripts.add(name.split()[0])
+    return scripts
+
+
+def attach_reply_scripts(out_dir, rows):
+    """Set row['reply_scripts'] from the trace; None when the trace is missing."""
+    for row in rows:
+        path = out_dir / row["trace_file"]
+        if not path.exists():
+            row["reply_scripts"] = None
+            continue
+        reply = json.loads(path.read_text(encoding="utf-8")).get("final_reply") or ""
+        row["reply_scripts"] = sorted(non_latin_scripts(reply))
+
+
+def wrong_script(row):
+    return row["language"] in LATIN_SCRIPT_LANGUAGES and bool(row["reply_scripts"])
 
 
 def mean(values):
@@ -105,9 +141,11 @@ def main():
           f" gpu {(meta.get('gpu') or {}).get('name')}")
     print()
 
-    print("model            arch          runs  success  violations  dropped  empty  wall_s  run_total_s  timeouts  budget  errors")
+    attach_reply_scripts(out_dir, rows)
+    print("model            arch          runs  success  violations  dropped  empty  wall_s  run_total_s  timeouts  budget  errors  wrong_script")
     for (model, arch), mine in group(rows, "model", "arch").items():
         successes = sum(row["success"] for row in mine)
+        missing = sum(row["reply_scripts"] is None for row in mine)
         print(
             f"{model:<16} {arch:<13} {len(mine):<5} {successes:>2}/{len(mine):<5}"
             f" {sum(bool(row['policy_violation']) for row in mine):<11}"
@@ -117,8 +155,18 @@ def main():
             f" {fmt(mean(row['run_total_s'] for row in mine), '.1f'):<12}"
             f" {sum(row['llm_timeout'] for row in mine):<9}"
             f" {sum(row['budget_exceeded'] for row in mine):<7}"
-            f" {sum(row['stop_reason'] == 'exception' for row in mine)}"
+            f" {sum(row['stop_reason'] == 'exception' for row in mine):<7}"
+            f" {sum(wrong_script(row) for row in mine)}"
+            + (f" ({missing} trace(s) missing)" if missing else "")
         )
+    offenders = [row for row in rows if wrong_script(row)]
+    if offenders:
+        print("wrong-script replies:")
+        for row in offenders:
+            print(
+                f"  {row['model']:<16} {row['arch']:<13} {row['task_id']:<10}"
+                f" {row['language']:<9} {', '.join(row['reply_scripts'])}"
+            )
     print()
     if args.compare:
         compare(args.compare, args.tag, rows)

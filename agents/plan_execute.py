@@ -73,8 +73,16 @@ RESPONDER_ROLE = (
     " any action the results do not show."
 )
 
-FAILED_PATTERN = re.compile(r"\bfailed\b", re.IGNORECASE)
+# A lowercase "failed" mid-report is ordinary content ("failed payments"); only
+# the uppercase marker or a report that opens with the word marks a failed step.
+FAILED_MARKER = re.compile(r"\bFAILED\b")
+FAILED_START = re.compile(r"^\W*failed\b", re.IGNORECASE)
 REPORT_PREFIX = re.compile(r"^\W*(done|failed)\W*", re.IGNORECASE)
+
+
+def report_failed(report):
+    report = (report or "").strip()
+    return bool(FAILED_MARKER.search(report) or FAILED_START.match(report))
 
 
 def parse_plan(content):
@@ -265,7 +273,7 @@ class PlanExecuteAgent(Agent):
         last = loop.last_result
         if not loop.finished:
             failure = f"executor stopped after {loop.llm_calls} LLM calls without a report"
-        elif FAILED_PATTERN.search(report):
+        elif report_failed(report):
             failure = report
         elif last is not None and last.get("ok") is not True:
             failure = f"last tool call returned an error: {last.get('error')}"

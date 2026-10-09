@@ -75,11 +75,14 @@ SUPERVISOR_ROLE = (
         for name, tools in SPECIALIST_TOOLS.items()
     )
     + "\n\nA specialist sees only your instruction, never the customer's message."
-    " In every instruction, copy word for word every identifier the customer"
-    " gave: order ID, phone number, product names, quantities, district,"
-    " amounts, and the customer's reason. Say exactly what you want the"
-    " specialist to do. A specialist can only use its own tools, so send each"
-    " task to the specialist that has the tool for it."
+    " In every instruction, pass on the customer's request word for word, and"
+    " copy word for word every identifier the customer gave: order ID, phone"
+    " number, product names, quantities, district, amounts, and the customer's"
+    " reason. Never paste policy text into an instruction; every specialist"
+    " already has the full policy. Never tell a specialist which tool to call;"
+    " it chooses its own tools. Say exactly what you want the specialist to do."
+    " A specialist can only use its own tools, so send each task to the"
+    " specialist that has the tool for it."
     f" You may delegate at most {MAX_DELEGATIONS} times in total. Base your final"
     " reply only on what the specialists reported, and never state a fact or an"
     " action that no report contains. When you are done, reply to the customer"
@@ -99,8 +102,8 @@ def _specialist_schema(name):
                 "properties": {
                     "instruction": {
                         "type": "string",
-                        "description": "What you want done, with every identifier the"
-                        " customer gave, copied word for word.",
+                        "description": "What you want done, with the customer's request"
+                        " and every identifier the customer gave, copied word for word.",
                     },
                 },
                 "required": ["instruction"],
