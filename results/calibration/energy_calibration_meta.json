@@ -1,0 +1,23 @@
+{
+  "model": "qwen2.5-7b-8k",
+  "idle_power_w": 12.408330118091,
+  "idle_counter_power_w": 12.342552948309342,
+  "idle_seconds": 30,
+  "block_seconds": [
+    0.5,
+    2.0,
+    10.0,
+    30.0
+  ],
+  "idle_repeats": 10,
+  "reset_repeats": 5,
+  "real_runs": 5,
+  "gap_s": 1.0,
+  "shuffle_seed": 0,
+  "hashes": {
+    "policy_sha256": "108c9136b218c6b16ced3ae58f5f5fb4ff053baa4ca5b5889041b98f3f62aade",
+    "prompt_sha256": "6c5bdb1a99ca4ee6d0b8ac63194c33d495f2e400ca940d8505d5a64c9efbeb29",
+    "tasks_sha256": "74fb7fde4d69428465e5566d30f332331c8e800fcfd0fc590ceb8e3ffc2a792d",
+    "harness_sha256": "a1f94412682cb3ad393f81964c861f2d4f82db08c6fc46b8433a1cffee87678e"
+  }
+}
