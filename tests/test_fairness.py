@@ -307,8 +307,9 @@ class TestPlanExecute:
         build_agent("plan_execute").run(TASK, shop, llm, seed=0)
         content = responder[0]["messages"][-1]["content"]
         assert content.endswith(TASK["instruction"])
-        assert "same language style" in content
         assert "plain text only" in content
+        for phrase in ("language style", "Banglish", "reply in English"):
+            assert phrase not in content
 
     def test_planner_is_told_not_to_name_tools_or_arguments(self):
         role = plan_execute.PLANNER_ROLE

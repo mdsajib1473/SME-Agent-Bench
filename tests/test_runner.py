@@ -20,7 +20,8 @@ REQUIRED_FIELDS = (
     "malformed_tool_calls", "text_tool_calls", "prompt_tokens", "completion_tokens",
     "wall_time_s", "llm_latency_s", "energy_wh", "net_energy_wh", "budget_exceeded",
     "llm_timeout", "stop_reason", "delegations", "replans", "policy_sha256", "tasks_sha256",
-    "error", "dropped_tool_calls", "empty_reply", "prompt_sha256",
+    "error", "dropped_tool_calls", "empty_reply", "prompt_sha256", "wrong_script",
+    "harness_sha256", "energy_counter_wh", "net_energy_counter_wh",
 )
 
 
@@ -71,6 +72,8 @@ def test_records_every_run_with_all_fields_and_traces(fake_env, monkeypatch):
     assert meta["idle_power_w"] == 12.5
     assert meta["policy_sha256"] == rows[0]["policy_sha256"]
     assert meta["tasks_sha256"] == rows[0]["tasks_sha256"]
+    assert meta["harness_sha256"] == rows[0]["harness_sha256"]
+    assert "counter_energy_wh" not in rows[0]
     assert "max_llm_calls_per_task" in meta["config_yaml"]
 
 
@@ -98,7 +101,7 @@ def test_resume_skips_done_and_reruns_a_cut_off_line(fake_env, monkeypatch):
 def test_resume_refuses_when_policy_or_tasks_changed(fake_env, monkeypatch, capsys):
     assert invoke(monkeypatch, *ARGS) == 0
     meta_path = fake_env / "t" / "meta.json"
-    for key in ("policy_sha256", "prompt_sha256", "tasks_sha256"):
+    for key in ("policy_sha256", "prompt_sha256", "tasks_sha256", "harness_sha256"):
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         original = meta[key]
         meta[key] = "0" * 64
@@ -143,3 +146,16 @@ def test_infrastructure_failure_stops_the_runner(fake_env, monkeypatch):
     assert invoke(monkeypatch, *ARGS) == 1
     runs_path = fake_env / "t" / "runs.jsonl"
     assert not runs_path.exists() or read_rows(runs_path) == []
+
+
+def test_wrong_script_is_recorded_per_run(fake_env, monkeypatch):
+    replies = iter(["Your refund is done.", "আপনার order", "Done.", "Done."])
+    monkeypatch.setattr(
+        run, "LLMClient",
+        lambda model, config: LLMClient(
+            model, config=config, client=FakeClient(lambda r: response(next(replies)))
+        ),
+    )
+    assert invoke(monkeypatch, *ARGS) == 0
+    rows = read_rows(fake_env / "t" / "runs.jsonl")
+    assert [row["wrong_script"] for row in rows] == [False, True, False, False]

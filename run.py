@@ -43,10 +43,12 @@ from agents.llm import (
     unload_model,
     warm_up_model,
 )
+from agents.harness import harness_sha256
 from agents.prompts import load_policy, policy_sha256, prompt_sha256
 from agents.registry import ARCHITECTURES, build_agent
 from env.shop import Shop
 from eval import scorer
+from eval.script_check import is_wrong_script
 from telemetry.energy import EnergyMeter, gpu_info, measure_idle_power
 
 RESULTS_DIR = ROOT / "results"
@@ -173,6 +175,7 @@ def run_once(agent, arch, task, seed, llm, config, idle_w, hashes, traces_dir):
         "output_match": score["output_match"] if score else None,
         "policy_violation": score["policy_violation"] if score else None,
         "empty_reply": score["empty_reply"] if score else None,
+        "wrong_script": is_wrong_script(task.get("language"), result.final_reply) if result is not None else None,
         "llm_calls": totals["llm_calls"],
         "tool_calls": totals["tool_calls"],
         "malformed_tool_calls": totals["malformed_tool_calls"],
@@ -184,6 +187,8 @@ def run_once(agent, arch, task, seed, llm, config, idle_w, hashes, traces_dir):
         "llm_latency_s": round(totals["llm_latency_s"], 4),
         "energy_wh": meter.energy_wh,
         "net_energy_wh": meter.net_energy_wh(idle_w),
+        "energy_counter_wh": meter.counter_energy_wh,
+        "net_energy_counter_wh": meter.net_counter_energy_wh(idle_w),
         "budget_exceeded": stop_reason == "budget_exceeded",
         "llm_timeout": bool(meta.get("llm_timeout")),
         "stop_reason": stop_reason,
@@ -192,11 +197,11 @@ def run_once(agent, arch, task, seed, llm, config, idle_w, hashes, traces_dir):
         "policy_sha256": meta.get("policy_sha256", hashes["policy_sha256"]),
         "prompt_sha256": meta.get("prompt_sha256", hashes["prompt_sha256"]),
         "tasks_sha256": hashes["tasks_sha256"],
+        "harness_sha256": hashes["harness_sha256"],
         "error": error or meta.get("error"),
         "reset_s": round(reset_s, 3),
         "post_timeout_reset_s": post_timeout_reset_s,
         "run_total_s": None,
-        "counter_energy_wh": meter.counter_energy_wh,
         "peak_vram_mib": meter.peak_vram_mib,
         "gpu_fraction": residency["gpu_fraction"] if residency else None,
         "trace_file": f"traces/{trace_name}",
@@ -240,6 +245,7 @@ def main():
     hashes = {
         "policy_sha256": policy_sha256(load_policy()),
         "prompt_sha256": prompt_sha256(load_policy()),
+        "harness_sha256": harness_sha256(config),
         "tasks_sha256": text_sha256(args.tasks),
     }
 
@@ -260,6 +266,7 @@ def main():
         for key, label in (
             ("policy_sha256", "env/policy.md"),
             ("prompt_sha256", "the shared system prompt (agents/prompts.py)"),
+            ("harness_sha256", "the harness (role prompts, tool schemas, scorer or limits)"),
             ("tasks_sha256", str(args.tasks)),
         ):
             if meta.get(key) != hashes[key]:
@@ -313,6 +320,7 @@ def main():
             "policy_sha256": hashes["policy_sha256"],
             "prompt_sha256": hashes["prompt_sha256"],
             "tasks_sha256": hashes["tasks_sha256"],
+            "harness_sha256": hashes["harness_sha256"],
             "tasks_path": str(args.tasks),
             "task_ids": [task["task_id"] for task in tasks],
             "seeds": seeds,

@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from agents import plan_execute, supervisor
+from agents import plan_execute, react, supervisor
+from agents.harness import harness_sha256
 from agents.llm import LLMClient
 from agents.prompts import (
     CONVERSATION_RULES,
@@ -311,3 +312,101 @@ class TestWrongScriptCount:
         from scripts.summarize_run import non_latin_scripts
 
         assert non_latin_scripts(text) == scripts
+
+    def test_summary_reads_the_field_and_falls_back_to_the_trace(self, tmp_path):
+        from scripts.summarize_run import attach_reply_scripts, wrong_script
+
+        trace = tmp_path / "trace.json"
+        trace.write_text(json.dumps({"final_reply": "আপনার"}), encoding="utf-8")
+        recorded = {"language": "en", "trace_file": "trace.json", "wrong_script": False}
+        older = {"language": "en", "trace_file": "trace.json"}
+        lost = {"language": "en", "trace_file": "gone.json", "wrong_script": True}
+        attach_reply_scripts(tmp_path, [recorded, older, lost])
+        assert [wrong_script(row) for row in (recorded, older, lost)] == [False, True, True]
+
+
+ROLE_TEXTS = [
+    (react, "ROLE_INSTRUCTIONS"),
+    (plan_execute, "PLANNER_ROLE"),
+    (plan_execute, "EXECUTOR_ROLE"),
+    (plan_execute, "RESPONDER_ROLE"),
+    (plan_execute, "PLAN_RETRY_INSTRUCTION"),
+    (plan_execute, "REPLAN_INSTRUCTION"),
+    (plan_execute, "EXECUTOR_INSTRUCTION"),
+    (plan_execute, "RESPONDER_INSTRUCTION"),
+    (plan_execute, "FALLBACK_STEP"),
+    (supervisor, "SUPERVISOR_ROLE"),
+]
+
+LIMITS = [
+    (react, "MAX_ITERATIONS"),
+    (plan_execute, "MAX_PLANNER_ATTEMPTS"),
+    (plan_execute, "MAX_STEP_CALLS"),
+    (plan_execute, "MAX_REPLANS"),
+    (plan_execute, "RESPONDER_RESERVE"),
+    (supervisor, "MAX_DELEGATIONS"),
+    (supervisor, "MAX_SPECIALIST_CALLS"),
+    (supervisor, "MAX_SUPERVISOR_TURNS"),
+    (supervisor, "SUPERVISOR_RESERVE"),
+]
+
+
+class TestHarnessHash:
+    def test_hash_is_stable_and_separate_from_the_prompt_hash(self):
+        assert harness_sha256() == harness_sha256()
+        assert re.fullmatch(r"[0-9a-f]{64}", harness_sha256())
+        assert harness_sha256() != prompt_sha256(load_policy())
+
+    @pytest.mark.parametrize("module, name", ROLE_TEXTS, ids=[n for _, n in ROLE_TEXTS])
+    def test_changing_a_role_prompt_changes_the_hash(self, monkeypatch, module, name):
+        before = harness_sha256()
+        prompt_before = prompt_sha256(load_policy())
+        monkeypatch.setattr(module, name, getattr(module, name) + " Extra sentence.")
+        assert harness_sha256() != before
+        assert prompt_sha256(load_policy()) == prompt_before
+
+    @pytest.mark.parametrize("specialist", list(supervisor.SPECIALIST_ROLES))
+    def test_changing_a_specialist_role_changes_the_hash(self, monkeypatch, specialist):
+        before = harness_sha256()
+        monkeypatch.setitem(
+            supervisor.SPECIALIST_ROLES, specialist, supervisor.SPECIALIST_ROLES[specialist] + " Extra."
+        )
+        assert harness_sha256() != before
+
+    @pytest.mark.parametrize("module, name", LIMITS, ids=[n for _, n in LIMITS])
+    def test_changing_an_agent_limit_changes_the_hash(self, monkeypatch, module, name):
+        before = harness_sha256()
+        monkeypatch.setattr(module, name, getattr(module, name) + 1)
+        assert harness_sha256() != before
+
+    @pytest.mark.parametrize("key", ["max_llm_calls_per_task", "max_tokens_per_call", "temperature"])
+    def test_changing_a_config_limit_changes_the_hash(self, key):
+        from agents.llm import load_config
+
+        config = dict(load_config())
+        before = harness_sha256(config)
+        config[key] = config[key] * 2
+        assert harness_sha256(config) != before
+
+    def test_seeds_and_model_list_do_not_change_the_hash(self):
+        from agents.llm import load_config
+
+        config = dict(load_config())
+        before = harness_sha256(config)
+        config.update(seeds=[7], models=["other"])
+        assert harness_sha256(config) == before
+
+    def test_changing_a_tool_schema_or_the_scorer_changes_the_hash(self, monkeypatch, tmp_path):
+        from agents import harness
+
+        before = harness_sha256()
+        schemas = json.loads(json.dumps(TOOL_SCHEMAS))
+        schemas[0]["function"]["description"] += " Extra."
+        monkeypatch.setattr(harness.tools, "TOOL_SCHEMAS", schemas)
+        assert harness_sha256() != before
+        monkeypatch.undo()
+
+        scorer_copy = tmp_path / "scorer.py"
+        scorer_copy.write_text(harness.SCORER_PATH.read_text(encoding="utf-8") + "\n# x\n", encoding="utf-8")
+        monkeypatch.setattr(harness, "SCORER_PATH", scorer_copy)
+        assert harness_sha256() != before

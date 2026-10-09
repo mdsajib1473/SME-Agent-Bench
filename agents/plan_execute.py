@@ -73,6 +73,28 @@ RESPONDER_ROLE = (
     " any action the results do not show."
 )
 
+# Fixed instruction text inside the per-step user messages; hashed into
+# harness_sha256 together with the role prompts.
+PLAN_RETRY_INSTRUCTION = (
+    'Reply with only JSON in this form: {"steps": ["first goal", "second goal"]}'
+)
+
+REPLAN_INSTRUCTION = (
+    "Write a new plan for the remaining work only, taking this into"
+    " account. Write each step as a goal in plain words, with no tool"
+    ' names, arguments or IDs. If no more tool work is needed, reply {"steps": []}.'
+)
+
+EXECUTOR_INSTRUCTION = (
+    "Call the tools this step needs. Then reply DONE with a short report,"
+    " or FAILED with the reason if you cannot do it."
+)
+
+RESPONDER_INSTRUCTION = (
+    "Write the reply to the customer now. Write plain text only, with no"
+    " markdown, lists, headings or emoji."
+)
+
 # A lowercase "failed" mid-report is ordinary content ("failed payments"); only
 # the uppercase marker or a report that opens with the word marks a failed step.
 FAILED_MARKER = re.compile(r"\bFAILED\b")
@@ -230,10 +252,7 @@ class PlanExecuteAgent(Agent):
             ctx.trace.add("plan", kind=kind, attempt=attempt, valid=error is None, steps=steps, error=error)
             if error is None:
                 return steps
-            retry = (
-                f"That reply was not a valid plan: {error}. Reply with only JSON"
-                ' in this form: {"steps": ["first goal", "second goal"]}'
-            )
+            retry = f"That reply was not a valid plan: {error}. {PLAN_RETRY_INSTRUCTION}"
             messages.append(result.message)
             messages.append({"role": "user", "content": retry})
             ctx.trace.message("user", retry, agent="planner")
@@ -249,9 +268,7 @@ class PlanExecuteAgent(Agent):
             f"Completed steps:\n{format_results(done)}\n\n"
             f"Step {failed.index} did not succeed. Its goal was: {failed.instruction}\n"
             f"What went wrong: {failed.failure}\n\n"
-            "Write a new plan for the remaining work only, taking this into"
-            " account. Write each step as a goal in plain words, with no tool"
-            ' names, arguments or IDs. If no more tool work is needed, reply {"steps": []}.'
+            f"{REPLAN_INSTRUCTION}"
         )
 
     def _execute_step(self, ctx, request, plan, records, instruction):
@@ -261,8 +278,7 @@ class PlanExecuteAgent(Agent):
             f"Full plan:\n{format_plan(plan)}\n\n"
             f"What earlier steps found:\n{format_results(records)}\n\n"
             f"Your job now is step {index} only: {instruction}\n"
-            "Call the tools this step needs. Then reply DONE with a short report,"
-            " or FAILED with the reason if you cannot do it."
+            f"{EXECUTOR_INSTRUCTION}"
         )
         messages = ctx.open_conversation("executor", EXECUTOR_ROLE, user_content)
         max_calls = min(MAX_STEP_CALLS, ctx.llm.calls_remaining - RESPONDER_RESERVE)
@@ -297,11 +313,7 @@ class PlanExecuteAgent(Agent):
         # reply follows its language style rather than the long results text.
         user_content = (
             f"What the team found and did:\n{format_results(records)}\n\n"
-            "Write the reply to the customer now. Answer in the same language"
-            " style as the customer's message below: if it is in English, reply in"
-            " English; if it is in Banglish (Bangla written in Latin letters),"
-            " reply in Banglish. Write plain text only, with no markdown, lists,"
-            " headings or emoji.\n\n"
+            f"{RESPONDER_INSTRUCTION}\n\n"
             f"Customer's message:\n{request}"
         )
         messages = ctx.open_conversation("responder", RESPONDER_ROLE, user_content)

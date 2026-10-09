@@ -306,7 +306,21 @@ def test_energy_meter_without_nvml(monkeypatch):
     assert meter.available is False
     assert meter.energy_wh is None
     assert meter.net_energy_wh(10.0) is None
+    assert meter.counter_energy_wh is None
+    assert meter.net_counter_energy_wh(10.0) is None
     assert energy.measure_idle_power(seconds=0) is None
+
+
+def test_net_counter_energy_subtracts_idle_over_the_measured_duration():
+    from telemetry import energy
+
+    meter = energy.EnergyMeter()
+    meter.counter_energy_wh = 0.5
+    meter.duration_s = 36.0
+    assert meter.net_counter_energy_wh(10.0) == 0.5 - 10.0 * 36.0 / 3600.0
+    assert meter.net_counter_energy_wh(None) is None
+    meter.counter_energy_wh = None
+    assert meter.net_counter_energy_wh(10.0) is None
 
 
 class TestModelReset:

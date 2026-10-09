@@ -12,6 +12,7 @@ Project rules. These apply to every session in this repository.
 - All randomness must be seeded. The shop environment uses a fixed clock of 2026-10-01 10:00 (Asia/Dhaka); never call datetime.now() inside the environment.
 - Tools are policy-permissive: they validate only that inputs are well-formed and IDs exist. They never enforce business policy. Enforcing policy is the agent's job, and violations are what we measure.
 - Every architecture must use the same LLM client, the same tools, the same policy text, and the same call budget. Fairness between arms is the top priority.
+- Harness frozen after pilot3. Do not change prompts, tools, scorer or config without asking; any change requires a new prompt_sha256 and a rerun.
 
 ## Environment notes
 

@@ -1,9 +1,10 @@
 """Summarize one run directory and project the time of a full run.
 
 Reads results/<tag>/runs.jsonl and meta.json and prints success, policy
-violations, timing and wrong-script replies (any non-Latin letter or digit in
-the final reply to an English or Banglish task, read from the trace) per model
-and architecture, reset time and malformed tool
+violations, timing and wrong-script replies (eval/script_check.py; read from
+the wrong_script field, or from the trace for older runs) per model
+and architecture, energy per model and architecture (net counter energy as the
+main figure, net sampled energy as the cross-check), reset time and malformed tool
 call rate per model, GPU placement per model, and an estimate for a full run
 from the measured per-run totals (reset included).
 
@@ -15,46 +16,75 @@ Usage (PowerShell):
 import argparse
 import json
 import sys
-import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from eval.script_check import is_wrong_script, non_latin_scripts
+
 RESULTS_DIR = ROOT / "results"
 GPU_HOURS_LIMIT = 30
-LATIN_SCRIPT_LANGUAGES = ("en", "banglish")
-# Non-ASCII letters that are not named LATIN but are normal in Latin text.
-LATIN_SAFE = set("µªº")
-
-
-def non_latin_scripts(text):
-    """Scripts of the non-Latin letters and digits in text, for example {'BENGALI', 'CJK'}."""
-    scripts = set()
-    for char in text or "":
-        if char.isascii() or char in LATIN_SAFE:
-            continue
-        category = unicodedata.category(char)
-        if not (category.startswith("L") or category == "Nd"):
-            continue
-        name = unicodedata.name(char, "UNKNOWN")
-        if "LATIN" not in name:
-            scripts.add(name.split()[0])
-    return scripts
 
 
 def attach_reply_scripts(out_dir, rows):
-    """Set row['reply_scripts'] from the trace; None when the trace is missing."""
+    """Set row['reply_scripts'] from the trace (None when missing) and fill
+    row['wrong_script'] for runs recorded before the field existed."""
     for row in rows:
         path = out_dir / row["trace_file"]
         if not path.exists():
             row["reply_scripts"] = None
+            row.setdefault("wrong_script", None)
             continue
         reply = json.loads(path.read_text(encoding="utf-8")).get("final_reply") or ""
         row["reply_scripts"] = sorted(non_latin_scripts(reply))
+        if row.get("wrong_script") is None:
+            row["wrong_script"] = is_wrong_script(row["language"], reply)
 
 
 def wrong_script(row):
-    return row["language"] in LATIN_SCRIPT_LANGUAGES and bool(row["reply_scripts"])
+    return bool(row.get("wrong_script"))
+
+
+def counter_energy(row, idle_w):
+    """(energy_counter_wh, net_energy_counter_wh, derived) for one run.
+
+    Runs recorded before the net counter field existed store the counter as
+    counter_energy_wh; their net value is derived with wall_time_s as the
+    duration, which is marked so it is not mistaken for a measured value.
+    """
+    if "net_energy_counter_wh" in row:
+        return row.get("energy_counter_wh"), row["net_energy_counter_wh"], False
+    counter = row.get("counter_energy_wh")
+    if counter is None or idle_w is None:
+        return counter, None, False
+    return counter, counter - idle_w * row["wall_time_s"] / 3600.0, True
+
+
+def print_energy(rows, idle_w):
+    print("energy per run, mean Wh. main: net_counter (NVML counter minus idle); cross-check: net_sampled")
+    print("model            arch          net_counter  net_sampled  counter  sampled  counter/sampled  no_counter")
+    derived = 0
+    for (model, arch), mine in group(rows, "model", "arch").items():
+        values = [counter_energy(row, idle_w) for row in mine]
+        derived += sum(flag for _, _, flag in values)
+        counters = [c for c, _, _ in values]
+        sampled = [row["energy_wh"] for row in mine]
+        ratios = [c / s for c, s in zip(counters, sampled) if c is not None and s]
+        print(
+            f"{model:<16} {arch:<13}"
+            f" {fmt(mean(n for _, n, _ in values), '.4f'):<12}"
+            f" {fmt(mean(row['net_energy_wh'] for row in mine), '.4f'):<12}"
+            f" {fmt(mean(counters), '.4f'):<8}"
+            f" {fmt(mean(sampled), '.4f'):<8}"
+            f" {fmt(mean(ratios), '.3f'):<16}"
+            f" {sum(c is None for c in counters)}"
+        )
+    if derived:
+        print(f"  {derived} run(s) predate net_energy_counter_wh; their net counter value uses wall_time_s as duration")
+    print()
 
 
 def mean(values):
@@ -139,13 +169,15 @@ def main():
     print(f"results/{args.tag}: {len(rows)} runs, models {models}, archs {archs}")
     print(f"idle power {fmt(meta.get('idle_power_w'), '.2f')} W, ollama {meta.get('ollama_version')},"
           f" gpu {(meta.get('gpu') or {}).get('name')}")
+    print(f"harness_sha256 {meta.get('harness_sha256') or 'not recorded'},"
+          f" prompt_sha256 {meta.get('prompt_sha256')}")
     print()
 
     attach_reply_scripts(out_dir, rows)
     print("model            arch          runs  success  violations  dropped  empty  wall_s  run_total_s  timeouts  budget  errors  wrong_script")
     for (model, arch), mine in group(rows, "model", "arch").items():
         successes = sum(row["success"] for row in mine)
-        missing = sum(row["reply_scripts"] is None for row in mine)
+        missing = sum(row["wrong_script"] is None for row in mine)
         print(
             f"{model:<16} {arch:<13} {len(mine):<5} {successes:>2}/{len(mine):<5}"
             f" {sum(bool(row['policy_violation']) for row in mine):<11}"
@@ -165,9 +197,10 @@ def main():
         for row in offenders:
             print(
                 f"  {row['model']:<16} {row['arch']:<13} {row['task_id']:<10}"
-                f" {row['language']:<9} {', '.join(row['reply_scripts'])}"
+                f" {row['language']:<9} {', '.join(row['reply_scripts'] or ['trace missing'])}"
             )
     print()
+    print_energy(rows, meta.get("idle_power_w"))
     if args.compare:
         compare(args.compare, args.tag, rows)
 
