@@ -1,0 +1,11 @@
+# Terms that must not appear in the anonymous review copy, one per line.
+# Copy this file to scripts/anonymity_terms.local.txt (ignored by git) and replace the
+# placeholders with the real terms: author names, user names, handles, institution
+# names and abbreviations, lab or group names, grant numbers, machine names.
+# Lines starting with # are comments. Matching ignores case, and a space or underscore
+# in a term also matches no separator, an underscore, a space, a hyphen or a dot.
+Author One Full Name
+author_one_username
+Author Two Full Name
+Institution Name
+Lab Or Group Name
