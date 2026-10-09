@@ -187,6 +187,10 @@ class Agent(ABC):
         except LLMError as exc:
             final_reply, stop_reason, error = "", "llm_error", str(exc)
             llm_timeout = exc.timeout
+        except Exception as exc:
+            # The runner records unexpected failures; keep the partial trace for it.
+            exc.agent_trace = trace.events
+            raise
 
         metadata = {
             "architecture": self.name,

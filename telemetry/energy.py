@@ -115,6 +115,29 @@ class EnergyMeter:
         return self.energy_wh - idle_power_w * self.duration_s / 3600.0
 
 
+def gpu_info(device_index=0):
+    """GPU name, total memory and driver version, or None without a GPU."""
+    nvml = _load_nvml()
+    if nvml is None:
+        return None
+    try:
+        handle = nvml.nvmlDeviceGetHandleByIndex(device_index)
+        name = nvml.nvmlDeviceGetName(handle)
+        driver = nvml.nvmlSystemGetDriverVersion()
+        return {
+            "name": name.decode("utf-8") if isinstance(name, bytes) else name,
+            "total_mib": nvml.nvmlDeviceGetMemoryInfo(handle).total / 1024**2,
+            "driver": driver.decode("utf-8") if isinstance(driver, bytes) else driver,
+        }
+    except Exception:
+        return None
+    finally:
+        try:
+            nvml.nvmlShutdown()
+        except Exception:
+            pass
+
+
 def measure_idle_power(seconds=30, device_index=0):
     """Mean board power in watts while nothing runs, or None without a GPU."""
     with EnergyMeter(device_index=device_index) as meter:

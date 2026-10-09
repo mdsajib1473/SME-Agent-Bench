@@ -84,13 +84,40 @@ def ollama_post(url, payload, timeout):
         return json.loads(response.read().decode("utf-8"))
 
 
+def _bare(name):
+    return str(name or "").removesuffix(":latest")
+
+
+def running_models(native_url, timeout):
+    return ollama_get(f"{native_url}/api/ps", timeout).get("models", []) or []
+
+
+def _running_entry(native_url, model, timeout):
+    for entry in running_models(native_url, timeout):
+        if _bare(model) in (_bare(entry.get("name")), _bare(entry.get("model"))):
+            return entry
+    return None
+
+
 def _model_loaded(native_url, model, timeout):
-    wanted = model.removesuffix(":latest")
-    running = ollama_get(f"{native_url}/api/ps", timeout)
-    return any(
-        str(entry.get(key, "")).removesuffix(":latest") == wanted
-        for entry in running.get("models", [])
-        for key in ("name", "model")
+    return _running_entry(native_url, model, timeout) is not None
+
+
+def unload_model(native_url, model, timeout):
+    ollama_post(f"{native_url}/api/generate", {"model": model, "keep_alive": 0}, timeout)
+    deadline = time.perf_counter() + UNLOAD_WAIT_S
+    while _model_loaded(native_url, model, timeout):
+        if time.perf_counter() > deadline:
+            raise RuntimeError(f"{model} still loaded {UNLOAD_WAIT_S} s after unload request")
+        time.sleep(UNLOAD_POLL_S)
+
+
+def warm_up_model(native_url, model, timeout):
+    """Load the model (if needed) with one fixed, seeded, one-token request."""
+    ollama_post(
+        f"{native_url}/api/generate",
+        {"model": model, "stream": False, **RESET_WARMUP},
+        timeout,
     )
 
 
@@ -105,20 +132,55 @@ def reset_model_state(model, config=None):
     native_url = native_base(config["ollama_base_url"])
     timeout = config["request_timeout_s"]
     started = time.perf_counter()
-
-    ollama_post(f"{native_url}/api/generate", {"model": model, "keep_alive": 0}, timeout)
-    deadline = started + UNLOAD_WAIT_S
-    while _model_loaded(native_url, model, timeout):
-        if time.perf_counter() > deadline:
-            raise RuntimeError(f"{model} still loaded {UNLOAD_WAIT_S} s after unload request")
-        time.sleep(UNLOAD_POLL_S)
-
-    ollama_post(
-        f"{native_url}/api/generate",
-        {"model": model, "stream": False, **RESET_WARMUP},
-        timeout,
-    )
+    unload_model(native_url, model, timeout)
+    warm_up_model(native_url, model, timeout)
     return time.perf_counter() - started
+
+
+def model_residency(model, config):
+    """Where Ollama placed the loaded model: bytes total, bytes in VRAM, GPU share."""
+    native_url = native_base(config["ollama_base_url"])
+    entry = _running_entry(native_url, model, config["request_timeout_s"])
+    if entry is None:
+        return None
+    size = entry.get("size") or 0
+    vram = entry.get("size_vram") or 0
+    fraction = vram / size if size else None
+    if fraction is None:
+        processor = "unknown"
+    elif fraction >= 1:
+        processor = "100% GPU"
+    else:
+        processor = f"{round((1 - fraction) * 100)}%/{round(fraction * 100)}% CPU/GPU"
+    return {
+        "size_bytes": size,
+        "size_vram_bytes": vram,
+        "gpu_fraction": fraction,
+        "processor": processor,
+        "context_length": entry.get("context_length"),
+    }
+
+
+def check_ollama(models, config):
+    """Return an error message, or None when the server is up and every model exists."""
+    native_url = native_base(config["ollama_base_url"])
+    try:
+        tags = ollama_get(f"{native_url}/api/tags", timeout=10)
+    except OSError as error:
+        return (
+            f"Ollama is not reachable at {native_url} ({error}). Start it with"
+            " 'ollama serve' or launch the Ollama app, then retry."
+        )
+    installed = {
+        _bare(entry.get(key)) for entry in tags.get("models", []) for key in ("name", "model")
+    }
+    missing = [model for model in models if _bare(model) not in installed]
+    if missing:
+        return "models not installed in Ollama: " + ", ".join(
+            f"{model} (create with 'ollama create {model} -f models\\{model}.Modelfile')"
+            for model in missing
+        )
+    return None
 
 
 @dataclass
