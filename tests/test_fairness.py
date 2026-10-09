@@ -57,10 +57,9 @@ def last_role(request):
 def first_tool_call(request):
     """One plausible call for whatever tools this request offers."""
     names = tool_names(request)
-    if "delegate" in names:
+    if "SupportAgent" in names:
         return native_call(
-            "delegate",
-            {"specialist": "SupportAgent", "instruction": "Look up order ORD-1008, phone 01339537672."},
+            "SupportAgent", {"instruction": "Look up order ORD-1008, phone 01339537672."}
         )
     if "get_order" in names:
         return native_call("get_order", {"order_id": "ORD-1008"})
@@ -135,7 +134,7 @@ class TestFairness:
         declared = set()
         for tools in build_agent(name).tools_by_role.values():
             declared.update(tools)
-        assert declared - {"delegate"} == set(TOOL_FUNCTIONS)
+        assert declared - set(supervisor.SPECIALIST_TOOLS) == set(TOOL_FUNCTIONS)
         assert len(TOOL_FUNCTIONS) == 12
 
     @pytest.mark.parametrize("name", list(ARCHITECTURES))
@@ -144,7 +143,7 @@ class TestFairness:
         build_agent(name).run(TASK, shop, llm, seed=0)
         for request in fake.requests:
             for schema in request.get("tools") or []:
-                assert schema in TOOL_SCHEMAS or schema is supervisor.DELEGATE_SCHEMA
+                assert schema in TOOL_SCHEMAS or schema in supervisor.SPECIALIST_SCHEMAS
 
     def test_specialist_tool_sets_match_the_design(self):
         assert supervisor.SPECIALIST_TOOLS == {
@@ -276,9 +275,46 @@ class TestPlanExecute:
         record = plan_execute.StepRecord(1, "Look up the order.", "DONE: found.", False, None,
                                          [(call, {"ok": True, "order": {"order_id": "ORD-1008"}})])
         text = plan_execute.format_results([record])
-        assert "Data returned by tools" in text
-        assert "->" not in text
+        assert "ORD-1008" in text
+        for marker in ("->", "{", "[", '"', "Outcome:", "Executor report:", "DONE", "FAILED", "failed"):
+            assert marker not in text
         assert find_text_tool_calls(text)[0] == []
+
+    def test_failed_anywhere_in_the_report_marks_the_step_failed(self, shop):
+        def handler(request):
+            if is_role(request, "You are the planner"):
+                return response(ONE_STEP_PLAN)
+            if is_role(request, "You are the executor"):
+                return response("Step 1 summary. Outcome: this step FAILED because the order is shipped.")
+            return response("Reply.")
+
+        llm, _ = make_llm(handler)
+        result = build_agent("plan_execute").run(TASK, shop, llm, seed=0)
+        steps = [e for e in result.trace if e["type"] == "step"]
+        assert steps[0]["status"] == "failed"
+        assert result.metadata["replans"] == 1
+
+    def test_responder_gets_the_customer_message_last(self, shop):
+        responder = []
+
+        def handler(request):
+            if is_role(request, "You are the planner"):
+                return response(json.dumps({"steps": []}))
+            responder.append(request)
+            return response("Reply.")
+
+        llm, _ = make_llm(handler)
+        build_agent("plan_execute").run(TASK, shop, llm, seed=0)
+        content = responder[0]["messages"][-1]["content"]
+        assert content.endswith(TASK["instruction"])
+        assert "same language style" in content
+        assert "plain text only" in content
+
+    def test_planner_is_told_not_to_name_tools_or_arguments(self):
+        role = plan_execute.PLANNER_ROLE
+        assert "Never write tool names, tool arguments, IDs" in role
+        for name in TOOL_FUNCTIONS:
+            assert name not in role
 
     def test_parse_plan_accepts_fenced_json_and_bare_lists(self):
         assert plan_execute.parse_plan('```json\n{"steps": ["a", "b"]}\n```') == (["a", "b"], None)
@@ -294,7 +330,7 @@ class TestSupervisor:
         specialist_requests = []
 
         def handler(request):
-            if "delegate" in tool_names(request):
+            if "SupportAgent" in tool_names(request):
                 return response(tool_calls=[first_tool_call(request)])
             specialist_requests.append(request)
             return response("Order ORD-1008 is delivered.")
@@ -312,7 +348,7 @@ class TestSupervisor:
             if is_role(request, "You are the supervisor"):
                 if last_role(request) == "user":
                     return response(tool_calls=[native_call(
-                        "delegate", {"specialist": "RefundAgent", "instruction": "Check ORD-1008."})])
+                        "RefundAgent", {"instruction": "Check ORD-1008."})])
                 return response("Final reply to the customer.")
             return response("ORD-1008 is delivered, total 2920.")
 
@@ -331,15 +367,65 @@ class TestSupervisor:
         ]
         assert result.final_reply == "Final reply to the customer."
 
-    def test_unknown_specialist_is_refused_without_a_call(self, shop):
+    def test_unknown_specialist_is_malformed_without_a_call(self, shop):
         def handler(request):
             if last_role(request) == "user":
-                return response(tool_calls=[native_call(
-                    "delegate", {"specialist": "LawyerAgent", "instruction": "Sue them."})])
+                return response(tool_calls=[native_call("LawyerAgent", {"instruction": "Sue them."})])
             return response("Sorry.")
 
         llm, fake = make_llm(handler)
         result = build_agent("supervisor").run(TASK, shop, llm, seed=0)
         assert len(fake.requests) == 2
         assert result.metadata["delegations"] == 0
+        assert result.metadata["malformed_tool_calls"] == 1
+
+    def test_empty_instruction_is_refused(self, shop):
+        def handler(request):
+            if last_role(request) == "user":
+                return response(tool_calls=[native_call("OrderAgent", {"instruction": "  "})])
+            return response("Sorry.")
+
+        llm, fake = make_llm(handler)
+        result = build_agent("supervisor").run(TASK, shop, llm, seed=0)
+        assert len(fake.requests) == 2
         assert result.metadata["delegations_refused"] == 1
+
+    def test_supervisor_has_one_tool_per_specialist(self, shop):
+        llm, fake = make_llm(polite_handler)
+        build_agent("supervisor").run(TASK, shop, llm, seed=0)
+        supervisor_requests = [r for r in fake.requests if is_role(r, "You are the supervisor")]
+        assert supervisor_requests
+        for request in supervisor_requests:
+            assert tool_names(request) == ["OrderAgent", "RefundAgent", "SalesAgent", "SupportAgent"]
+            for schema in request["tools"]:
+                assert list(schema["function"]["parameters"]["properties"]) == ["instruction"]
+
+    def test_role_prompts_carry_the_handoff_rules(self):
+        role = supervisor.SUPERVISOR_ROLE
+        assert "cannot see any order" in role
+        assert "word for word" in role
+        assert "only on what the specialists reported" in role
+        for text in supervisor.SPECIALIST_ROLES.values():
+            assert "can only use your own tools" in text
+            assert "Report only actions you actually performed" in text
+            assert "say so plainly" in text
+
+
+class TestDroppedToolCalls:
+    @pytest.mark.parametrize("name", list(ARCHITECTURES))
+    def test_dropped_output_is_counted_and_marked_in_every_architecture(self, shop, name):
+        def handler(request):
+            if is_role(request, "You are the planner"):
+                return response(ONE_STEP_PLAN)
+            return response("", completion_tokens=57)
+
+        llm, _ = make_llm(handler)
+        result = build_agent(name).run(TASK, shop, llm, seed=0)
+        dropped_events = [e for e in result.trace if e["type"] == "llm_call" and e["dropped"]]
+        assert result.metadata["dropped_tool_calls"] == len(dropped_events) >= 1
+        assert result.final_reply == ""
+
+    def test_empty_response_without_tokens_is_not_dropped(self, shop):
+        llm, _ = make_llm(lambda request: response("", completion_tokens=0))
+        result = build_agent("react").run(TASK, shop, llm, seed=0)
+        assert result.metadata["dropped_tool_calls"] == 0

@@ -31,44 +31,50 @@ RESULT_TEXT_LIMIT = 2000
 FALLBACK_STEP = "Handle the customer's request as the policy requires."
 
 
-def _tool_lines():
+def _capability_lines():
+    # Capabilities in words only: tool names and argument syntax in the plan
+    # led the executor to copy them as malformed calls.
     lines = []
     for name in ALL_TOOL_NAMES:
         description = SCHEMA_BY_NAME[name]["function"]["description"]
-        lines.append(f"- {name}: {description.split('. ')[0].rstrip('.')}.")
+        lines.append(f"- {description.split('. ')[0].rstrip('.')}.")
     return "\n".join(lines)
 
 
 PLANNER_ROLE = (
     "You are the planner in a plan-and-execute team. You cannot use tools and"
     " you have not seen any shop data. Write a plan that an executor will carry"
-    " out one step at a time with these tools:\n"
-    f"{_tool_lines()}\n\n"
-    "Each step is one short instruction. Include the lookups needed to check"
-    " the policy before any action, and make an action conditional when the"
-    " policy only allows it in some cases. Do not add a step for writing the"
-    " reply; a responder writes it after the steps run. Use at most 6 steps.\n"
-    'Reply with only JSON in this form: {"steps": ["first step", "second step"]}'
+    " out one step at a time. The executor can:\n"
+    f"{_capability_lines()}\n\n"
+    "Write each step as the goal of that step in plain words, for example"
+    " 'Find the order and check that the phone number the customer gave is the"
+    " one registered on it'. Never write tool names, tool arguments, IDs,"
+    " numbers or other values in a step; the executor reads them from the"
+    " customer's message. Include the lookups needed to check the policy"
+    " before any action, and make an action conditional when the policy only"
+    " allows it in some cases. Do not add a step for writing the reply; a"
+    " responder writes it after the steps run. Use at most 6 steps.\n"
+    'Reply with only JSON in this form: {"steps": ["first goal", "second goal"]}'
 )
 
 EXECUTOR_ROLE = (
     "You are the executor in a plan-and-execute team. Carry out only the"
     " current step of the plan, using the tools. Never take an action the"
     " policy forbids. When the step is done, reply without calling a tool,"
-    " starting with DONE: and a short report of what you found or did, with"
-    " exact IDs, amounts and statuses. If you cannot complete the step,"
-    " including because the policy forbids it, reply starting with FAILED:"
-    " and the reason."
+    " starting with DONE and then a short report in plain sentences of what you"
+    " found or did, with exact IDs, amounts and statuses. If you cannot"
+    " complete the step, including because the policy forbids it, reply"
+    " starting with FAILED and the reason."
 )
 
 RESPONDER_ROLE = (
     "You are the responder in a plan-and-execute team. Write the final reply"
-    " to the customer from their request and the results of the steps that"
-    " were run. Do not claim any action the results do not show. Reply with"
-    " the message to the customer only."
+    " to the customer from the results of the steps that were run. Do not claim"
+    " any action the results do not show."
 )
 
-FAILED_PATTERN = re.compile(r"^\W*failed\b", re.IGNORECASE)
+FAILED_PATTERN = re.compile(r"\bfailed\b", re.IGNORECASE)
+REPORT_PREFIX = re.compile(r"^\W*(done|failed)\W*", re.IGNORECASE)
 
 
 def parse_plan(content):
@@ -112,29 +118,51 @@ class StepRecord:
     calls: list = field(default_factory=list)
 
 
-def _clip(value):
-    text = json.dumps(value, ensure_ascii=False, default=str)
-    return text if len(text) <= RESULT_TEXT_LIMIT else text[:RESULT_TEXT_LIMIT] + "..."
+def describe(value):
+    """Flatten a tool result into plain words, with no brackets or quotes."""
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            if key == "ok":
+                continue
+            parts.append(f"{key.replace('_', ' ')} {describe(item)}")
+        return ", ".join(parts)
+    if isinstance(value, list):
+        if not value:
+            return "none"
+        return "; ".join(describe(item) for item in value)
+    if value is None:
+        return "not set"
+    return str(value)
+
+
+def _sentence(text):
+    text = " ".join(str(text).split())
+    if len(text) > RESULT_TEXT_LIMIT:
+        text = text[:RESULT_TEXT_LIMIT].rsplit(" ", 1)[0] + " and more"
+    return text if text.endswith(".") else text + "."
 
 
 def format_results(records):
-    # Tool data is shown as JSON results only, never in call syntax: a 7B
-    # executor shown "tool {args} -> result" lines starts writing fake calls as
-    # prose instead of calling the tools.
+    # Plain sentences only. A 7B executor shown labelled blocks or JSON started
+    # writing the same blocks into its own reports instead of calling tools.
     if not records:
-        return "None yet."
-    blocks = []
+        return "No step has run yet."
+    paragraphs = []
     for record in records:
-        lines = [
-            f"Step {record.index}: {record.instruction}",
-            f"Outcome: {'failed' if record.failed else 'done'}",
-            f"Executor report: {record.report or '(no report)'}",
+        report = REPORT_PREFIX.sub("", record.report or "").strip()
+        sentences = [
+            f"Step {record.index} had the goal: {_sentence(record.instruction)}",
+            "That step did not succeed." if record.failed else "That step succeeded.",
+            f"The executor said: {_sentence(report)}" if report else "The executor gave no report.",
         ]
-        if record.calls:
-            data = [{"tool": call.name, "result": result} for call, result in record.calls]
-            lines.append(f"Data returned by tools: {_clip(data)}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+        for call, result in record.calls:
+            if result.get("ok"):
+                sentences.append(f"Looking this up with {call.name} gave {_sentence(describe(result))}")
+            else:
+                sentences.append(f"Calling {call.name} returned an error: {_sentence(result.get('error'))}")
+        paragraphs.append(" ".join(sentences))
+    return "\n\n".join(paragraphs)
 
 
 def format_plan(steps):
@@ -196,7 +224,7 @@ class PlanExecuteAgent(Agent):
                 return steps
             retry = (
                 f"That reply was not a valid plan: {error}. Reply with only JSON"
-                ' in this form: {"steps": ["first step", "second step"]}'
+                ' in this form: {"steps": ["first goal", "second goal"]}'
             )
             messages.append(result.message)
             messages.append({"role": "user", "content": retry})
@@ -211,10 +239,11 @@ class PlanExecuteAgent(Agent):
             f"Customer request:\n{request}\n\n"
             f"Current plan:\n{format_plan(plan)}\n\n"
             f"Completed steps:\n{format_results(done)}\n\n"
-            f"Step {failed.index} failed: {failed.instruction}\n"
-            f"Failure: {failed.failure}\n\n"
-            "Write a new plan for the remaining work only, taking the failure"
-            ' into account. If no more tool work is needed, reply {"steps": []}.'
+            f"Step {failed.index} did not succeed. Its goal was: {failed.instruction}\n"
+            f"What went wrong: {failed.failure}\n\n"
+            "Write a new plan for the remaining work only, taking this into"
+            " account. Write each step as a goal in plain words, with no tool"
+            ' names, arguments or IDs. If no more tool work is needed, reply {"steps": []}.'
         )
 
     def _execute_step(self, ctx, request, plan, records, instruction):
@@ -224,8 +253,8 @@ class PlanExecuteAgent(Agent):
             f"Full plan:\n{format_plan(plan)}\n\n"
             f"What earlier steps found:\n{format_results(records)}\n\n"
             f"Your job now is step {index} only: {instruction}\n"
-            "Call the tools this step needs. Then reply DONE: with a short report,"
-            " or FAILED: with the reason if you cannot do it."
+            "Call the tools this step needs. Then reply DONE with a short report,"
+            " or FAILED with the reason if you cannot do it."
         )
         messages = ctx.open_conversation("executor", EXECUTOR_ROLE, user_content)
         max_calls = min(MAX_STEP_CALLS, ctx.llm.calls_remaining - RESPONDER_RESERVE)
@@ -236,7 +265,7 @@ class PlanExecuteAgent(Agent):
         last = loop.last_result
         if not loop.finished:
             failure = f"executor stopped after {loop.llm_calls} LLM calls without a report"
-        elif FAILED_PATTERN.match(report):
+        elif FAILED_PATTERN.search(report):
             failure = report
         elif last is not None and last.get("ok") is not True:
             failure = f"last tool call returned an error: {last.get('error')}"
@@ -256,13 +285,16 @@ class PlanExecuteAgent(Agent):
         return StepRecord(index, instruction, report, failure is not None, failure, loop.calls)
 
     def _respond(self, ctx, request, records):
-        # The customer's message goes last, next to the generation, so the reply
-        # follows its language style rather than the long English results block.
+        # The customer's message goes last, right before the generation, so the
+        # reply follows its language style rather than the long results text.
         user_content = (
             f"What the team found and did:\n{format_results(records)}\n\n"
-            f"Customer's message:\n{request}\n\n"
-            "Write the reply to this customer now, in the same language style as"
-            " their message."
+            "Write the reply to the customer now. Answer in the same language"
+            " style as the customer's message below: if it is in English, reply in"
+            " English; if it is in Banglish (Bangla written in Latin letters),"
+            " reply in Banglish. Write plain text only, with no markdown, lists,"
+            " headings or emoji.\n\n"
+            f"Customer's message:\n{request}"
         )
         messages = ctx.open_conversation("responder", RESPONDER_ROLE, user_content)
         return ctx.chat(messages, agent="responder").content

@@ -11,6 +11,8 @@ Counter meanings:
     tool_calls            shop tool calls executed (native and text)
     malformed_tool_calls  tool calls rejected before execution
     text_tool_calls       tool calls recovered from message text, executed or not
+    dropped_tool_calls    responses with output tokens but no content and no tool
+                          call: the serving layer discarded what the model wrote
 """
 
 import json
@@ -36,6 +38,7 @@ TOTAL_KEYS = (
     "tool_calls",
     "malformed_tool_calls",
     "text_tool_calls",
+    "dropped_tool_calls",
     "prompt_tokens",
     "completion_tokens",
     "llm_latency_s",
@@ -207,6 +210,7 @@ class ChatResult:
     latency_s: float = 0.0
     finish_reason: str | None = None
     call_index: int = 0
+    dropped: bool = False
 
 
 def _parse_arguments(raw):
@@ -419,6 +423,18 @@ class LLMClient:
                 for call in tool_calls
             ]
 
+        finish_reason = getattr(choice, "finish_reason", None)
+        # Ollama discards a generated tool call whose name matches no supplied
+        # tool, together with its text, so the model's output never reaches us.
+        dropped = (
+            finish_reason in ("stop", "length")
+            and not content.strip()
+            and not tool_calls
+            and completion_tokens > 0
+        )
+        if dropped:
+            self.totals["dropped_tool_calls"] += 1
+
         return ChatResult(
             message=message,
             content=content,
@@ -426,8 +442,9 @@ class LLMClient:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             latency_s=latency,
-            finish_reason=getattr(choice, "finish_reason", None),
+            finish_reason=finish_reason,
             call_index=call_index,
+            dropped=dropped,
         )
 
     def _make_call(self, call_id, name, raw, source, known, call_index, position):

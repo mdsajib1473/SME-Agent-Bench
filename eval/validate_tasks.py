@@ -1,10 +1,12 @@
 """Task file validator.
 
 Checks the schema, replays every gold action, confirms required outputs are
-derivable from the seed database, then runs two reference agents: an oracle that
-performs exactly the gold actions and quotes the required outputs, and a no-op
-agent that does nothing. The oracle must pass everything; the no-op agent must
-pass only the traps whose correct behaviour is to do nothing and say so.
+derivable from the seed database, then runs reference agents: an oracle that
+performs exactly the gold actions and quotes the required outputs, the same
+oracle with an empty reply, and a no-op agent that does nothing. The oracle must
+pass everything; the silent oracle must fail everything, because an empty reply
+to the customer always fails; the no-op agent must pass only the traps whose
+correct behaviour is to do nothing and say so.
 """
 
 import json
@@ -21,6 +23,7 @@ from env.shop import Shop
 from eval import scorer
 
 NO_OP_REPLY = "Sorry, I cannot help"
+ORACLE_REPLY = "Handled as policy requires."
 
 REQUIRED_FIELDS = {
     "task_id": str,
@@ -286,8 +289,11 @@ def ownership_check(tasks):
     return failures, intended
 
 
-def run_oracle(task):
-    """Perform exactly the gold actions and quote every required output."""
+def run_oracle(task, silent=False):
+    """Perform exactly the gold actions and quote every required output.
+
+    silent=True sends an empty reply instead, which must always fail.
+    """
     with Shop() as shop:
         results = scorer.replay_gold_actions(shop, task.get("gold_actions", []))
         tool_calls = [
@@ -299,7 +305,7 @@ def run_oracle(task):
             for entry in results
         ]
         quoted = ", ".join(str(value) for value in task.get("required_outputs", []))
-        reply = f"Handled as policy requires. {quoted}".strip()
+        reply = "" if silent else f"{ORACLE_REPLY} {quoted}".strip()
         snapshot = shop.snapshot()
     return scorer.score(task, snapshot, reply, tool_calls)
 
@@ -358,11 +364,20 @@ def main(argv=None):
                 f"    state_match={result['state_match']}"
                 f" output_match={result['output_match']}"
                 f" policy_violation={result['policy_violation']}"
+                f" empty_reply={result['empty_reply']}"
             )
             if result["diff"]:
                 print(f"    diff: {result['diff']}")
             if result["missing_outputs"]:
                 print(f"    missing outputs: {result['missing_outputs']}")
+
+    silent_passes = [
+        task["task_id"] for task in tasks if run_oracle(task, silent=True)["success"]
+    ]
+    print(
+        f"\nsilent oracle (gold actions, empty reply) passes: {len(silent_passes)}"
+        f" {silent_passes}"
+    )
 
     print("\nno-op agent:")
     no_op_successes = []
@@ -380,6 +395,7 @@ def main(argv=None):
     print("\nsummary")
     print(f"  schema and replay problems: {len(problems)}")
     print(f"  oracle success rate: {(len(tasks) - len(oracle_failures)) / len(tasks):.0%}")
+    print(f"  silent oracle success rate: {len(silent_passes) / len(tasks):.0%} (must be 0%)")
     print(f"  no-op success rate:  {no_op_rate:.0%} {no_op_successes}")
     print(f"  do-nothing trap share: {trap_share:.0%} {do_nothing_traps}")
 
@@ -397,7 +413,7 @@ def main(argv=None):
         f"{sum(1 for task in tasks if task['language'] == 'banglish')}"
     )
 
-    ok = not problems and not oracle_failures and not unexpected
+    ok = not problems and not oracle_failures and not unexpected and not silent_passes
     print(f"\nvalidation: {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1
 

@@ -43,7 +43,7 @@ from agents.llm import (
     unload_model,
     warm_up_model,
 )
-from agents.prompts import load_policy, policy_sha256
+from agents.prompts import load_policy, policy_sha256, prompt_sha256
 from agents.registry import ARCHITECTURES, build_agent
 from env.shop import Shop
 from eval import scorer
@@ -172,10 +172,12 @@ def run_once(agent, arch, task, seed, llm, config, idle_w, hashes, traces_dir):
         "state_match": score["state_match"] if score else None,
         "output_match": score["output_match"] if score else None,
         "policy_violation": score["policy_violation"] if score else None,
+        "empty_reply": score["empty_reply"] if score else None,
         "llm_calls": totals["llm_calls"],
         "tool_calls": totals["tool_calls"],
         "malformed_tool_calls": totals["malformed_tool_calls"],
         "text_tool_calls": totals["text_tool_calls"],
+        "dropped_tool_calls": totals["dropped_tool_calls"],
         "prompt_tokens": totals["prompt_tokens"],
         "completion_tokens": totals["completion_tokens"],
         "wall_time_s": meta.get("wall_time_s", round(run_wall, 4)),
@@ -188,6 +190,7 @@ def run_once(agent, arch, task, seed, llm, config, idle_w, hashes, traces_dir):
         "delegations": meta.get("delegations") if arch == "supervisor" else None,
         "replans": meta.get("replans") if arch == "plan_execute" else None,
         "policy_sha256": meta.get("policy_sha256", hashes["policy_sha256"]),
+        "prompt_sha256": meta.get("prompt_sha256", hashes["prompt_sha256"]),
         "tasks_sha256": hashes["tasks_sha256"],
         "error": error or meta.get("error"),
         "reset_s": round(reset_s, 3),
@@ -236,6 +239,7 @@ def main():
         tasks = tasks[: args.limit]
     hashes = {
         "policy_sha256": policy_sha256(load_policy()),
+        "prompt_sha256": prompt_sha256(load_policy()),
         "tasks_sha256": text_sha256(args.tasks),
     }
 
@@ -253,7 +257,11 @@ def main():
             print(f"STOP: results/{out_dir.name}/runs.jsonl exists but meta.json is missing; cannot verify hashes.")
             return 1
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        for key, label in (("policy_sha256", "env/policy.md"), ("tasks_sha256", str(args.tasks))):
+        for key, label in (
+            ("policy_sha256", "env/policy.md"),
+            ("prompt_sha256", "the shared system prompt (agents/prompts.py)"),
+            ("tasks_sha256", str(args.tasks)),
+        ):
             if meta.get(key) != hashes[key]:
                 print(
                     f"STOP: {label} changed since this run started ({key} was {meta.get(key)},"
@@ -303,6 +311,7 @@ def main():
             "idle_power_w": idle_w,
             "idle_power_state": f"{first_model} resident, no request running",
             "policy_sha256": hashes["policy_sha256"],
+            "prompt_sha256": hashes["prompt_sha256"],
             "tasks_sha256": hashes["tasks_sha256"],
             "tasks_path": str(args.tasks),
             "task_ids": [task["task_id"] for task in tasks],

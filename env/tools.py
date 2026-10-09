@@ -85,7 +85,7 @@ def get_customer(shop, phone):
 def get_order(shop, order_id):
     if not isinstance(order_id, str) or not ORDER_PATTERN.match(order_id):
         return _error(
-            "order_id must be a string in the format ORD-1001", received=order_id
+            "order_id must be a string in the format ORD-NNNN", received=order_id
         )
     order = _find_order(shop.connection, order_id)
     if order is None:
@@ -156,7 +156,7 @@ def search_products(shop, query):
 def check_stock(shop, product_id):
     if not isinstance(product_id, str) or not PRODUCT_PATTERN.match(product_id):
         return _error(
-            "product_id must be a string in the format PRD-001", received=product_id
+            "product_id must be a string in the format PRD-NNN", received=product_id
         )
     row = shop.connection.execute(
         "SELECT product_id, name, price_bdt, stock FROM products WHERE product_id = ?",
@@ -188,7 +188,7 @@ def cancel_order(shop, order_id, reason):
 
 
 def _parse_quantity_value(value):
-    """Accept 3, "3", or "PRD-001:3"; returns (product_id_or_None, quantity)."""
+    """Accept 3, "3", or "PRD-NNN:3"; returns (product_id_or_None, quantity)."""
     if isinstance(value, bool):
         return None, None
     if isinstance(value, int):
@@ -237,7 +237,7 @@ def update_order(shop, order_id, field, value):
     if quantity is None or quantity <= 0:
         return _error(
             "quantity value must be a positive integer, or the string"
-            " PRD-001:3 to pick a line on a multi-item order",
+            " PRD-NNN:3 to pick a line on a multi-item order",
             received=value,
         )
     items = order["items"]
@@ -245,7 +245,7 @@ def update_order(shop, order_id, field, value):
         if len(items) != 1:
             return _error(
                 "this order has several items, so the value must name one, for"
-                " example PRD-001:3",
+                " example PRD-NNN:3",
                 items=[item["product_id"] for item in items],
             )
         product_id = items[0]["product_id"]
@@ -357,7 +357,7 @@ def create_quote(shop, customer_phone, district, items, discount_percent):
         quantity = entry.get("quantity")
         if not isinstance(product_id, str) or not PRODUCT_PATTERN.match(product_id):
             return _error(
-                "each item needs a product_id in the format PRD-001",
+                "each item needs a product_id in the format PRD-NNN",
                 received=product_id,
             )
         if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
@@ -656,7 +656,7 @@ TOOL_SCHEMAS = [
         {
             "order_id": {
                 "type": "string",
-                "description": "Order id, format ORD-1001.",
+                "description": "Order id, format ORD-NNNN.",
             }
         },
         ["order_id"],
@@ -690,7 +690,7 @@ TOOL_SCHEMAS = [
         {
             "product_id": {
                 "type": "string",
-                "description": "Product id, format PRD-001.",
+                "description": "Product id, format PRD-NNN.",
             }
         },
         ["product_id"],
@@ -702,7 +702,7 @@ TOOL_SCHEMAS = [
         {
             "order_id": {
                 "type": "string",
-                "description": "Order id, format ORD-1001.",
+                "description": "Order id, format ORD-NNNN.",
             },
             "reason": {
                 "type": "string",
@@ -718,7 +718,7 @@ TOOL_SCHEMAS = [
         {
             "order_id": {
                 "type": "string",
-                "description": "Order id, format ORD-1001.",
+                "description": "Order id, format ORD-NNNN.",
             },
             "field": {
                 "type": "string",
@@ -728,7 +728,7 @@ TOOL_SCHEMAS = [
             "value": {
                 "type": "string",
                 "description": "New value. For address, the full address text. For"
-                " quantity, the new quantity as a number, or 'PRD-001:3' to pick"
+                " quantity, the new quantity as a number, or 'PRD-NNN:3' to pick"
                 " one line on a multi-item order.",
             },
         },
@@ -742,7 +742,7 @@ TOOL_SCHEMAS = [
         {
             "order_id": {
                 "type": "string",
-                "description": "Order id, format ORD-1001.",
+                "description": "Order id, format ORD-NNNN.",
             },
             "amount_bdt": {
                 "type": "number",
@@ -783,7 +783,7 @@ TOOL_SCHEMAS = [
                     "properties": {
                         "product_id": {
                             "type": "string",
-                            "description": "Product id, format PRD-001.",
+                            "description": "Product id, format PRD-NNN.",
                         },
                         "quantity": {
                             "type": "integer",
@@ -821,7 +821,7 @@ TOOL_SCHEMAS = [
             },
             "order_id": {
                 "type": "string",
-                "description": "Related order id, format ORD-1001. Omit if the"
+                "description": "Related order id, format ORD-NNNN. Omit if the"
                 " complaint is not about a specific order.",
             },
         },
@@ -848,11 +848,11 @@ TOOL_SCHEMAS = [
         {
             "order_id": {
                 "type": "string",
-                "description": "Order id, format ORD-1001.",
+                "description": "Order id, format ORD-NNNN.",
             },
             "code": {
                 "type": "string",
-                "description": "Coupon code, for example WELCOME5.",
+                "description": "Coupon code exactly as the customer gave it.",
             },
         },
         ["order_id", "code"],

@@ -20,7 +20,7 @@ REQUIRED_FIELDS = (
     "malformed_tool_calls", "text_tool_calls", "prompt_tokens", "completion_tokens",
     "wall_time_s", "llm_latency_s", "energy_wh", "net_energy_wh", "budget_exceeded",
     "llm_timeout", "stop_reason", "delegations", "replans", "policy_sha256", "tasks_sha256",
-    "error",
+    "error", "dropped_tool_calls", "empty_reply", "prompt_sha256",
 )
 
 
@@ -98,7 +98,7 @@ def test_resume_skips_done_and_reruns_a_cut_off_line(fake_env, monkeypatch):
 def test_resume_refuses_when_policy_or_tasks_changed(fake_env, monkeypatch, capsys):
     assert invoke(monkeypatch, *ARGS) == 0
     meta_path = fake_env / "t" / "meta.json"
-    for key in ("policy_sha256", "tasks_sha256"):
+    for key in ("policy_sha256", "prompt_sha256", "tasks_sha256"):
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         original = meta[key]
         meta[key] = "0" * 64

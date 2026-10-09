@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from agents.llm import BudgetExceeded, LLMError
-from agents.prompts import build_system_prompt, load_policy, policy_sha256
+from agents.prompts import build_system_prompt, load_policy, policy_sha256, prompt_sha256
 from env.tools import TOOL_SCHEMAS
 
 ALL_TOOL_NAMES = tuple(entry["function"]["name"] for entry in TOOL_SCHEMAS)
@@ -54,6 +54,7 @@ class Trace:
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
             finish_reason=result.finish_reason,
+            dropped=result.dropped,
             content=result.content,
             tool_calls=[
                 {
@@ -106,6 +107,7 @@ class RunContext:
         self.trace = trace
         self.policy_text = policy_text
         self.policy_sha256 = policy_sha256(policy_text)
+        self.prompt_sha256 = prompt_sha256(policy_text)
         self.extra = {}
         self._logged_systems = set()
 
@@ -198,6 +200,7 @@ class Agent(ABC):
             "model": llm.model,
             "seed": seed,
             "policy_sha256": ctx.policy_sha256,
+            "prompt_sha256": ctx.prompt_sha256,
             "stop_reason": stop_reason,
             "error": error,
             "llm_timeout": llm_timeout,

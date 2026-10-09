@@ -209,9 +209,36 @@ class TestMissingOutputCase:
 
     def test_no_required_outputs_always_matches(self, tasks):
         task = tasks["ORD-E-01"]
-        snapshot, reply, calls = run_agent(task["gold_actions"], "")
+        snapshot, reply, calls = run_agent(task["gold_actions"], "Order cancelled.")
         result = scorer.score(task, snapshot, reply, calls)
         assert result["output_match"]
+        assert result["success"]
+
+
+class TestEmptyReply:
+    @pytest.mark.parametrize("reply", ["", "   \n\t ", None])
+    def test_correct_actions_with_empty_reply_fail(self, tasks, reply):
+        task = tasks["ORD-E-01"]
+        snapshot, _, calls = run_agent(task["gold_actions"], reply)
+        result = scorer.score(task, snapshot, reply, calls)
+        assert result["state_match"]
+        assert result["output_match"]
+        assert result["empty_reply"]
+        assert not result["success"]
+
+    def test_do_nothing_trap_with_empty_reply_fails(self, tasks):
+        task = tasks["CMP-H-01"]
+        snapshot, _, calls = run_agent([], "")
+        result = scorer.score(task, snapshot, "", calls)
+        assert result["state_match"] and not result["policy_violation"]
+        assert result["empty_reply"]
+        assert not result["success"]
+
+    def test_any_non_blank_reply_is_not_empty(self, tasks):
+        task = tasks["CMP-H-01"]
+        snapshot, _, calls = run_agent([], "Sorry, I cannot do that.")
+        result = scorer.score(task, snapshot, "Sorry, I cannot do that.", calls)
+        assert not result["empty_reply"]
         assert result["success"]
 
 

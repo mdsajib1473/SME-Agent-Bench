@@ -30,6 +30,51 @@ def fmt(value, spec=".2f"):
     return "n/a" if value is None else format(value, spec)
 
 
+def count(rows, key):
+    """Sum of a counter or flag; None when the run directory predates the field."""
+    if any(key not in row for row in rows):
+        return None
+    return sum(int(row[key] or 0) for row in rows)
+
+
+def load_rows(tag):
+    path = RESULTS_DIR / tag / "runs.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def compare(old_tag, new_tag, new_rows):
+    old_rows = load_rows(old_tag)
+    rescored = 0
+    for row in old_rows:
+        # Older runs predate the empty-reply rule; apply it from the trace so
+        # both sides are scored the same way.
+        if "empty_reply" not in row:
+            trace = json.loads((RESULTS_DIR / old_tag / row["trace_file"]).read_text(encoding="utf-8"))
+            row["empty_reply"] = not (trace.get("final_reply") or "").strip()
+            if row["success"] and row["empty_reply"]:
+                row["success"] = False
+                rescored += 1
+    old_groups = group(old_rows, "model", "arch")
+    print(f"comparison: {old_tag} -> {new_tag}"
+          + (f" ({rescored} {old_tag} run(s) rescored as failed under the empty-reply rule)" if rescored else ""))
+    print("model            arch          success        violations   mean wall_s      tasks newly passed / newly failed")
+    for (model, arch), mine in group(new_rows, "model", "arch").items():
+        before = old_groups.get((model, arch), [])
+        old_pass = {row["task_id"] for row in before if row["success"]}
+        new_pass = {row["task_id"] for row in mine if row["success"]}
+        print(
+            f"{model:<16} {arch:<13} {len(old_pass):>2} -> {len(new_pass):<9}"
+            f" {sum(bool(r['policy_violation']) for r in before):>2} -> {sum(bool(r['policy_violation']) for r in mine):<7}"
+            f" {fmt(mean(r['wall_time_s'] for r in before), '.1f'):>5} -> {fmt(mean(r['wall_time_s'] for r in mine), '.1f'):<7}"
+            f" +{sorted(new_pass - old_pass)} -{sorted(old_pass - new_pass)}"
+        )
+    print(
+        f"total success {sum(r['success'] for r in old_rows)}/{len(old_rows)} ->"
+        f" {sum(r['success'] for r in new_rows)}/{len(new_rows)}"
+    )
+    print()
+
+
 def group(rows, *keys):
     groups = defaultdict(list)
     for row in rows:
@@ -42,6 +87,7 @@ def main():
     parser.add_argument("--tag", required=True)
     parser.add_argument("--full-tasks", type=int, default=80)
     parser.add_argument("--full-seeds", type=int, default=3)
+    parser.add_argument("--compare", help="another tag to compare success, violations and time with")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
@@ -59,12 +105,14 @@ def main():
           f" gpu {(meta.get('gpu') or {}).get('name')}")
     print()
 
-    print("model            arch          runs  success  violations  wall_s  run_total_s  timeouts  budget  errors")
+    print("model            arch          runs  success  violations  dropped  empty  wall_s  run_total_s  timeouts  budget  errors")
     for (model, arch), mine in group(rows, "model", "arch").items():
         successes = sum(row["success"] for row in mine)
         print(
             f"{model:<16} {arch:<13} {len(mine):<5} {successes:>2}/{len(mine):<5}"
             f" {sum(bool(row['policy_violation']) for row in mine):<11}"
+            f" {fmt(count(mine, 'dropped_tool_calls'), 'd'):<8}"
+            f" {fmt(count(mine, 'empty_reply'), 'd'):<6}"
             f" {fmt(mean(row['wall_time_s'] for row in mine), '.1f'):<7}"
             f" {fmt(mean(row['run_total_s'] for row in mine), '.1f'):<12}"
             f" {sum(row['llm_timeout'] for row in mine):<9}"
@@ -72,6 +120,8 @@ def main():
             f" {sum(row['stop_reason'] == 'exception' for row in mine)}"
         )
     print()
+    if args.compare:
+        compare(args.compare, args.tag, rows)
 
     print("model            reset_s  malformed/attempted  rate    runs_with_malformed  text_calls  peak_vram_mib  min_gpu_share  placement")
     for (model,), mine in group(rows, "model").items():

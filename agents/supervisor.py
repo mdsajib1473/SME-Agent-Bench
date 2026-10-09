@@ -1,9 +1,10 @@
 """Supervisor multi-agent architecture.
 
-A supervisor with one tool, delegate(specialist, instruction), hands work to
-four specialists. Each specialist sees only the supervisor's instruction, runs
-a short tool-calling loop with its own tools, and returns a text report. All
-information between agents passes through those instructions and reports.
+The supervisor has four tools, one per specialist (OrderAgent, RefundAgent,
+SalesAgent, SupportAgent), each taking a single instruction. Calling one runs
+that specialist: it sees only the instruction, runs a short tool-calling loop
+with its own tools, and returns a text report. All information between agents
+passes through those instructions and reports.
 
 Budget: every agent draws on the one per-task LLM budget. A delegation is only
 started when at least one call remains for the supervisor afterwards, so a
@@ -47,11 +48,15 @@ SPECIALIST_DUTIES = {
 
 SPECIALIST_ROLE_TEMPLATE = (
     "You are the {name}, a specialist in a team led by a supervisor. You handle"
-    " {duties}. Your tools: {tools}. You receive one instruction from the"
-    " supervisor and never see the customer's own message. Never take an action"
-    " the policy forbids. When you are finished, reply without calling a tool"
-    " with a short report for the supervisor: what you checked, what you did or"
-    " refused and why, with exact IDs, amounts and statuses."
+    " {duties}. You can only use your own tools: {tools}. You cannot do anything"
+    " that needs another tool. You receive one instruction from the supervisor"
+    " and never see the customer's own message. Never take an action the policy"
+    " forbids. When you are finished, reply without calling a tool with a short"
+    " report for the supervisor. Report only actions you actually performed with"
+    " your tools, with exact IDs, amounts and statuses, and what you checked. If"
+    " you could not do something, because it needs a tool you do not have, the"
+    " policy forbids it, or a lookup failed, say so plainly; never claim it was"
+    " done."
 )
 
 SPECIALIST_ROLES = {
@@ -63,55 +68,59 @@ SPECIALIST_ROLES = {
 
 SUPERVISOR_ROLE = (
     "You are the supervisor of a team of specialists. You cannot use shop tools"
-    " and you cannot see any order, customer or product data, so never decide"
-    " about an order before a specialist has looked it up. Use the delegate tool"
-    " to hand work to one specialist at a time:\n"
+    " and you cannot see any order, customer or product data. Hand work to a"
+    " specialist by calling the tool with its name; each takes one instruction:\n"
     + "\n".join(
-        f"- {name}: {SPECIALIST_DUTIES[name]} (tools: {', '.join(tools)})"
+        f"- {name}: {SPECIALIST_DUTIES[name]} (its tools: {', '.join(tools)})"
         for name, tools in SPECIALIST_TOOLS.items()
     )
-    + "\n\nA specialist sees only your instruction, never the customer's message,"
-    " so put every detail it needs in the instruction: order ID, phone number,"
-    " amounts, district, products, quantities, and what the customer wants."
-    f" You may delegate at most {MAX_DELEGATIONS} times. When you have what you"
-    " need, reply to the customer without calling a tool; that reply is your"
-    " final answer."
+    + "\n\nA specialist sees only your instruction, never the customer's message."
+    " In every instruction, copy word for word every identifier the customer"
+    " gave: order ID, phone number, product names, quantities, district,"
+    " amounts, and the customer's reason. Say exactly what you want the"
+    " specialist to do. A specialist can only use its own tools, so send each"
+    " task to the specialist that has the tool for it."
+    f" You may delegate at most {MAX_DELEGATIONS} times in total. Base your final"
+    " reply only on what the specialists reported, and never state a fact or an"
+    " action that no report contains. When you are done, reply to the customer"
+    " without calling a tool; that reply is your final answer."
 )
 
-DELEGATE_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "delegate",
-        "description": "Hand one task to a specialist and get back its short report."
-        " The specialist sees only your instruction.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "specialist": {
-                    "type": "string",
-                    "enum": list(SPECIALIST_TOOLS),
-                    "description": "Which specialist to use.",
+
+def _specialist_schema(name):
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": f"Ask the {name} to handle {SPECIALIST_DUTIES[name]}."
+            " It sees only your instruction and returns a short report.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "instruction": {
+                        "type": "string",
+                        "description": "What you want done, with every identifier the"
+                        " customer gave, copied word for word.",
+                    },
                 },
-                "instruction": {
-                    "type": "string",
-                    "description": "Everything the specialist needs to do the task.",
-                },
+                "required": ["instruction"],
             },
-            "required": ["specialist", "instruction"],
         },
-    },
-}
+    }
+
+
+SPECIALIST_SCHEMAS = [_specialist_schema(name) for name in SPECIALIST_TOOLS]
 
 
 class SupervisorAgent(Agent):
     name = "supervisor"
-    tools_by_role = {"supervisor": ("delegate",), **SPECIALIST_TOOLS}
+    tools_by_role = {"supervisor": tuple(SPECIALIST_TOOLS), **SPECIALIST_TOOLS}
 
     def _run(self, ctx):
         ctx.extra.update(delegations=0, delegations_refused=0)
         messages = ctx.open_conversation("supervisor", SUPERVISOR_ROLE, ctx.task["instruction"])
         for _ in range(MAX_SUPERVISOR_TURNS):
-            result = ctx.chat(messages, tools=[DELEGATE_SCHEMA], agent="supervisor")
+            result = ctx.chat(messages, tools=SPECIALIST_SCHEMAS, agent="supervisor")
             messages.append(result.message)
             if not result.tool_calls:
                 return result.content, "final_answer"
@@ -139,13 +148,8 @@ class SupervisorAgent(Agent):
             ctx.trace.tool_call(call, error, 0.0, agent="supervisor")
             return error
 
-        specialist = call.arguments.get("specialist")
+        specialist = call.name
         instruction = call.arguments.get("instruction")
-        if specialist not in SPECIALIST_TOOLS:
-            return self._refuse(
-                ctx, specialist, instruction,
-                f"specialist must be one of {', '.join(SPECIALIST_TOOLS)}",
-            )
         if not isinstance(instruction, str) or not instruction.strip():
             return self._refuse(ctx, specialist, instruction, "instruction must be a non-empty string")
         if ctx.extra["delegations"] >= MAX_DELEGATIONS:

@@ -237,6 +237,10 @@ def describe_diff(expected, actual):
     return "; ".join(shown) + suffix
 
 
+def is_empty_reply(final_reply):
+    return final_reply is None or not str(final_reply).strip()
+
+
 def score(task, actual_snapshot, final_reply, tool_calls, seed_db_path=None):
     expected = expected_state(task, seed_db_path)
     actual = comparable_state(actual_snapshot)
@@ -249,13 +253,16 @@ def score(task, actual_snapshot, final_reply, tool_calls, seed_db_path=None):
 
     output_match = not missing_outputs
     policy_violation = bool(violations)
+    # Every task needs some reply to the customer, even a refusal.
+    empty_reply = is_empty_reply(final_reply)
 
     return {
         "task_id": task.get("task_id"),
         "state_match": state_match,
         "output_match": output_match,
         "policy_violation": policy_violation,
-        "success": state_match and output_match and not policy_violation,
+        "empty_reply": empty_reply,
+        "success": state_match and output_match and not policy_violation and not empty_reply,
         "diff": "" if state_match else describe_diff(expected, actual),
         "missing_outputs": missing_outputs,
         "violations": violations,
