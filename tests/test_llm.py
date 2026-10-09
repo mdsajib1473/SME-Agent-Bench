@@ -305,6 +305,7 @@ def test_energy_meter_without_nvml(monkeypatch):
         pass
     assert meter.available is False
     assert meter.energy_wh is None
+    assert meter.energy_raw_wh is None
     assert meter.net_energy_wh(10.0) is None
     assert meter.counter_energy_wh is None
     assert meter.net_counter_energy_wh(10.0) is None
@@ -321,6 +322,85 @@ def test_net_counter_energy_subtracts_idle_over_the_measured_duration():
     assert meter.net_counter_energy_wh(None) is None
     meter.counter_energy_wh = None
     assert meter.net_counter_energy_wh(10.0) is None
+
+
+def test_integrate_wh_cuts_segments_at_the_window_edges():
+    from telemetry import energy
+
+    samples = [(0.1 * k, 100.0) for k in range(31)]
+    assert energy.integrate_wh(samples, 1.05, 2.05) * 3600.0 == pytest.approx(100.0)
+    ramp = [(0.0, 0.0), (1.0, 100.0)]
+    assert energy.integrate_wh(ramp, 0.5, 1.0) * 3600.0 == pytest.approx(37.5)
+
+
+def test_lag_correction_recovers_a_power_step():
+    from telemetry import energy
+
+    lag = 0.65
+    # True power steps from 10 W to 110 W at t = 1.0; the reported series shows it lag seconds later.
+    samples = [(0.1 * k, 10.0 if 0.1 * k < 1.0 + lag else 110.0) for k in range(41)]
+    true_j = 10.0 * 0.5 + 110.0 * 1.5
+    corrected_j = energy.integrate_wh(samples, 0.5, 2.5, lag) * 3600.0
+    raw_j = energy.integrate_wh(samples, 0.5, 2.5) * 3600.0
+    assert corrected_j == pytest.approx(true_j, abs=1.0)
+    assert raw_j < true_j - 50.0
+
+
+class FakeNvml:
+    """Constant 50 W board: power in mW and a counter in mJ that follows perf_counter."""
+
+    def __init__(self):
+        import time
+
+        self.time = time
+
+    def nvmlInit(self):
+        pass
+
+    def nvmlShutdown(self):
+        pass
+
+    def nvmlDeviceGetHandleByIndex(self, index):
+        return index
+
+    def nvmlDeviceGetPowerUsage(self, handle):
+        return 50000
+
+    def nvmlDeviceGetMemoryInfo(self, handle):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(used=1024**2)
+
+    def nvmlDeviceGetTotalEnergyConsumption(self, handle):
+        return int(50000 * self.time.perf_counter())
+
+
+def test_meter_samples_a_tail_but_reads_the_counter_at_the_block_end(monkeypatch):
+    import time
+
+    from telemetry import energy
+
+    monkeypatch.setattr(energy, "_load_nvml", FakeNvml)
+    monkeypatch.setattr(energy, "LAG_TAIL_S", 0.3)
+    with energy.EnergyMeter(interval_s=0.02, lag_s=0.2) as meter:
+        time.sleep(0.3)
+    assert meter.samples[-1][0] - meter.ended >= 0.25
+    assert meter.counter_energy_wh * 3600.0 == pytest.approx(50.0 * meter.duration_s, abs=1.0)
+    assert meter.energy_raw_wh * 3600.0 == pytest.approx(50.0 * meter.duration_s, abs=1.0)
+    assert meter.energy_wh == pytest.approx(meter.energy_raw_wh, rel=1e-6)
+    assert meter.net_energy_wh(50.0) * 3600.0 == pytest.approx(0.0, abs=1.0)
+
+
+def test_meter_without_lag_has_no_tail(monkeypatch):
+    import time
+
+    from telemetry import energy
+
+    monkeypatch.setattr(energy, "_load_nvml", FakeNvml)
+    with energy.EnergyMeter(interval_s=0.02) as meter:
+        time.sleep(0.1)
+    assert meter.samples[-1][0] - meter.ended < 0.05
+    assert meter.energy_wh == meter.energy_raw_wh
 
 
 class TestModelReset:

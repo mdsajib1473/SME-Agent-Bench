@@ -1,16 +1,23 @@
 """GPU energy measurement with NVML.
 
-EnergyMeter samples board power every 100 ms on a background thread and
-integrates the samples (trapezoid rule) into watt-hours for the duration of the
-with-block. When the driver exposes the cumulative energy counter, its delta is
-recorded too as a cross-check. If pynvml or the GPU is unavailable every energy
-field stays None and nothing raises.
+EnergyMeter samples board power every 100 ms on a background thread for the
+duration of the with-block. On this GPU (Ampere) the reported power is a 1 s
+average refreshed about every 0.5 s, so it trails the true power by about
+0.65 s. With lag_s > 0 the sample timestamps are shifted back by lag_s, the
+thread keeps sampling for LAG_TAIL_S after the block so the shifted series
+covers the whole block, and the shifted series is integrated over the block
+only (trapezoid rule). That lag corrected figure is energy_wh; the unshifted
+integral over the block is energy_raw_wh. When the driver exposes the
+cumulative energy counter, its delta over the block is recorded too, as a
+cross-check. If pynvml, the GPU or the counter is unavailable the affected
+fields stay None and nothing raises.
 """
 
 import threading
 import time
 
 SAMPLE_INTERVAL_S = 0.1
+LAG_TAIL_S = 1.0
 
 
 def _load_nvml():
@@ -25,16 +32,35 @@ def _load_nvml():
     return pynvml
 
 
+def integrate_wh(samples, start, end, lag_s=0.0):
+    """Trapezoid energy in Wh of (time, watts) samples shifted back by lag_s, over [start, end].
+
+    Segments that cross a window edge are cut there with linear interpolation.
+    """
+    points = sorted((t - lag_s, w) for t, w in samples)
+    joules = 0.0
+    for (t0, w0), (t1, w1) in zip(points, points[1:]):
+        a, b = max(t0, start), min(t1, end)
+        if b <= a:
+            continue
+        slope = (w1 - w0) / (t1 - t0)
+        joules += (w0 + slope * (a - t0) + w0 + slope * (b - t0)) / 2.0 * (b - a)
+    return joules / 3600.0
+
+
 class EnergyMeter:
-    def __init__(self, device_index=0, interval_s=SAMPLE_INTERVAL_S):
+    def __init__(self, device_index=0, interval_s=SAMPLE_INTERVAL_S, lag_s=0.0):
         self.device_index = device_index
         self.interval_s = interval_s
+        self.lag_s = lag_s
         self.available = False
         self.energy_wh = None
+        self.energy_raw_wh = None
         self.counter_energy_wh = None
         self.mean_power_w = None
         self.peak_vram_mib = None
         self.duration_s = None
+        self.ended = None
         self.samples = []
         self._nvml = None
         self._handle = None
@@ -48,10 +74,12 @@ class EnergyMeter:
             watts = self._nvml.nvmlDeviceGetPowerUsage(self._handle) / 1000.0
             used = self._nvml.nvmlDeviceGetMemoryInfo(self._handle).used / 1024**2
         except Exception:
-            return
-        self.samples.append((time.perf_counter(), watts))
+            return None
+        sample = (time.perf_counter(), watts)
+        self.samples.append(sample)
         if self.peak_vram_mib is None or used > self.peak_vram_mib:
             self.peak_vram_mib = used
+        return sample
 
     def _loop(self):
         while not self._stop.wait(self.interval_s):
@@ -80,24 +108,31 @@ class EnergyMeter:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        self.duration_s = time.perf_counter() - self._started
+        self.ended = time.perf_counter()
+        self.duration_s = self.ended - self._started
         if not self.available:
             return False
+        last = self._sample()
+        counter_end = self._read_counter_mj()
+        if self.lag_s > 0:
+            time.sleep(LAG_TAIL_S)
         self._stop.set()
         self._thread.join()
-        self._sample()
-        counter_end = self._read_counter_mj()
         if self._counter_start is not None and counter_end is not None:
             self.counter_energy_wh = (counter_end - self._counter_start) / 3.6e6
         self._shutdown()
 
-        if len(self.samples) >= 2:
-            joules = 0.0
-            for (t0, w0), (t1, w1) in zip(self.samples, self.samples[1:]):
-                joules += (w0 + w1) / 2.0 * (t1 - t0)
-            span = self.samples[-1][0] - self.samples[0][0]
-            self.energy_wh = joules / 3600.0
-            self.mean_power_w = joules / span if span > 0 else self.samples[0][1]
+        self.samples.sort()
+        start = self.samples[0][0] if self.samples else None
+        end = last[0] if last is not None else self.ended
+        block = [s for s in self.samples if s[0] <= end]
+        if len(block) >= 2:
+            self.energy_raw_wh = integrate_wh(block, start, end)
+            span = end - start
+            self.mean_power_w = self.energy_raw_wh * 3600.0 / span if span > 0 else block[0][1]
+            self.energy_wh = (
+                integrate_wh(self.samples, start, end, self.lag_s) if self.lag_s > 0 else self.energy_raw_wh
+            )
         return False
 
     def _shutdown(self):
@@ -109,10 +144,16 @@ class EnergyMeter:
         self._nvml = None
 
     def net_energy_wh(self, idle_power_w):
-        """Energy above the idle baseline over the same duration."""
+        """Sampled energy (lag corrected when lag_s > 0) above the idle baseline over the same duration."""
         if self.energy_wh is None or idle_power_w is None:
             return None
         return self.energy_wh - idle_power_w * self.duration_s / 3600.0
+
+    def net_counter_energy_wh(self, idle_power_w):
+        """Counter energy above the idle baseline over the same duration."""
+        if self.counter_energy_wh is None or idle_power_w is None:
+            return None
+        return self.counter_energy_wh - idle_power_w * self.duration_s / 3600.0
 
 
 def gpu_info(device_index=0):

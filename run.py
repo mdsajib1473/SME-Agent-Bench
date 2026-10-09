@@ -2,10 +2,13 @@
 
 Loops model (outer), architecture, task, seed. Before each model it unloads any
 other model and warms the target up. Before every run it resets the model
-(unload, reload, fixed warm-up) outside the timed and energy-measured block,
-and resets again after an LLM timeout. Each run appends one line to
-results/<tag>/runs.jsonl (flushed and synced) and writes its full trace to
-results/<tag>/traces/. --resume skips combinations already recorded.
+(unload, reload, fixed warm-up) and waits settle_seconds, both outside the
+timed and energy-measured block, and resets again after an LLM timeout. Idle
+power is measured for IDLE_SECONDS at the start of a session, whenever the
+model or architecture changes, and every IDLE_EVERY_RUNS runs; each run uses the
+most recent value. Each run appends one line to results/<tag>/runs.jsonl
+(flushed and synced) and writes its full trace to results/<tag>/traces/.
+--resume skips combinations already recorded.
 
 Usage (PowerShell):
     .venv\\Scripts\\python.exe run.py --tag main
@@ -18,6 +21,7 @@ import hashlib
 import json
 import os
 import platform
+import statistics
 import sys
 import time
 import traceback
@@ -54,10 +58,14 @@ from telemetry.energy import EnergyMeter, gpu_info, measure_idle_power
 RESULTS_DIR = ROOT / "results"
 DEFAULT_TASKS_PATH = ROOT / "tasks" / "tasks.jsonl"
 DEFAULT_ARCHS = ("react", "plan_execute", "supervisor")
-IDLE_SECONDS = 30
+IDLE_SECONDS = 10
 IDLE_SETTLE_S = 5
-# A resumed run must not mix results produced under different fairness settings.
+IDLE_EVERY_RUNS = 25
+SETTLE_TAIL_S = 2.0
+# A resumed run must not mix results produced under different fairness or
+# energy measurement settings.
 FAIRNESS_KEYS = ("max_llm_calls_per_task", "max_tokens_per_call", "temperature", "seeds")
+MEASUREMENT_KEYS = ("settle_seconds", "power_lag_s")
 
 
 def text_sha256(path):
@@ -122,6 +130,36 @@ def prepare_model(model, config):
     return time.perf_counter() - started
 
 
+def settle_wait(seconds):
+    """Wait after the reset warm-up. Returns mean sampled power over the last 2 s, or None."""
+    if seconds <= 0:
+        return None
+    with EnergyMeter() as meter:
+        time.sleep(seconds)
+    tail = [w for t, w in meter.samples if t >= meter.ended - SETTLE_TAIL_S]
+    return statistics.mean(tail) if tail else None
+
+
+def measure_idle(meta, meta_path, model, arch, reason, run_number):
+    """Settle, measure idle power with the model resident, and record it in meta.json."""
+    time.sleep(IDLE_SETTLE_S)
+    idle_w = measure_idle_power(seconds=IDLE_SECONDS)
+    meta.setdefault("idle_measurements", []).append({
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+        "model": model,
+        "arch": arch,
+        "reason": reason,
+        "before_session_run": run_number,
+        "idle_w": idle_w,
+    })
+    if meta.get("idle_power_w") is None:
+        meta["idle_power_w"] = idle_w
+    write_json(meta_path, meta)
+    shown = "n/a" if idle_w is None else f"{idle_w:.2f}"
+    tqdm.write(f"idle {shown} W ({reason}, {model} {arch})")
+    return idle_w
+
+
 def ollama_version(config):
     try:
         return ollama_get(f"{native_base(config['ollama_base_url'])}/api/version", 10).get("version")
@@ -133,8 +171,10 @@ def run_once(agent, arch, task, seed, llm, config, idle_w, hashes, traces_dir):
     started = time.perf_counter()
     reset_s = reset_model_state(llm.model, config)
     residency = model_residency(llm.model, config)
+    settle_s = config["settle_seconds"]
+    tail_w = settle_wait(settle_s)
 
-    meter = EnergyMeter()
+    meter = EnergyMeter(lag_s=config["power_lag_s"])
     result, score, error, error_trace, partial_trace = None, None, None, None, []
     with Shop() as shop:
         run_started = time.perf_counter()
@@ -145,7 +185,8 @@ def run_once(agent, arch, task, seed, llm, config, idle_w, hashes, traces_dir):
             error = f"{type(exc).__name__}: {exc}"
             error_trace = traceback.format_exc()
             partial_trace = getattr(exc, "agent_trace", [])
-        run_wall = time.perf_counter() - run_started
+        # The meter keeps sampling briefly after the block; time stops at the block end.
+        run_wall = (meter.ended or time.perf_counter()) - run_started
         if result is not None:
             try:
                 score = scorer.score(task, shop.snapshot(), result.final_reply, result.tool_calls)
@@ -187,8 +228,12 @@ def run_once(agent, arch, task, seed, llm, config, idle_w, hashes, traces_dir):
         "llm_latency_s": round(totals["llm_latency_s"], 4),
         "energy_wh": meter.energy_wh,
         "net_energy_wh": meter.net_energy_wh(idle_w),
+        "energy_sampled_raw_wh": meter.energy_raw_wh,
         "energy_counter_wh": meter.counter_energy_wh,
         "net_energy_counter_wh": meter.net_counter_energy_wh(idle_w),
+        "idle_w_used": idle_w,
+        "settle_seconds": settle_s,
+        "tail_w_before_run": tail_w,
         "budget_exceeded": stop_reason == "budget_exceeded",
         "llm_timeout": bool(meta.get("llm_timeout")),
         "stop_reason": stop_reason,
@@ -275,7 +320,7 @@ def main():
                     f" now {hashes[key]}). Results would mix two versions; start a new --tag instead."
                 )
                 return 1
-        changed = [k for k in FAIRNESS_KEYS if meta["config"].get(k) != config.get(k)]
+        changed = [k for k in FAIRNESS_KEYS + MEASUREMENT_KEYS if meta["config"].get(k) != config.get(k)]
         if changed:
             print(f"STOP: config.yaml changed since this run started: {', '.join(changed)}. Start a new --tag.")
             return 1
@@ -302,9 +347,6 @@ def main():
     if meta is None:
         first_model = plan[0][0]
         load_s = prepare_model(first_model, config)
-        time.sleep(IDLE_SETTLE_S)
-        print(f"measuring idle GPU power for {IDLE_SECONDS} s with {first_model} resident...")
-        idle_w = measure_idle_power(seconds=IDLE_SECONDS)
         meta = {
             "tag": args.tag,
             "started_utc": datetime.now(timezone.utc).isoformat(),
@@ -315,8 +357,14 @@ def main():
             "gpu": gpu_info(),
             "python": platform.python_version(),
             "platform": platform.platform(),
-            "idle_power_w": idle_w,
-            "idle_power_state": f"{first_model} resident, no request running",
+            "idle_power_w": None,
+            "idle_power_state": "model resident, no request running, after a settle wait",
+            "idle_seconds": IDLE_SECONDS,
+            "idle_settle_s": IDLE_SETTLE_S,
+            "idle_every_runs": IDLE_EVERY_RUNS,
+            "idle_measurements": [],
+            "settle_seconds": config["settle_seconds"],
+            "power_lag_s": config["power_lag_s"],
             "policy_sha256": hashes["policy_sha256"],
             "prompt_sha256": hashes["prompt_sha256"],
             "tasks_sha256": hashes["tasks_sha256"],
@@ -328,18 +376,28 @@ def main():
             "resumes": [],
         }
         write_json(meta_path, meta)
-        print(f"idle power {idle_w if idle_w is None else round(idle_w, 2)} W; meta written to results/{out_dir.name}/meta.json")
+        print(f"meta written to results/{out_dir.name}/meta.json")
     else:
         meta["resumes"].append({"at_utc": datetime.now(timezone.utc).isoformat(), "remaining": len(plan)})
         write_json(meta_path, meta)
         print(f"resuming results/{out_dir.name}: {len(done)} done, {len(plan)} to go")
-    idle_w = meta["idle_power_w"]
 
     agents = {arch: build_agent(arch) for arch in args.archs}
     progress = tqdm(total=len(plan), unit="run", dynamic_ncols=True, smoothing=0.05)
     successes = 0
-    current_model, llm = None, None
-    for model, arch, task, seed in plan:
+    current_model, current_arch, llm = None, None, None
+    idle_w, since_idle = None, 0
+    for number, (model, arch, task, seed) in enumerate(plan, start=1):
+        if current_model is None:
+            idle_reason = "session start"
+        elif model != current_model:
+            idle_reason = "model change"
+        elif arch != current_arch:
+            idle_reason = "architecture change"
+        elif since_idle >= IDLE_EVERY_RUNS:
+            idle_reason = f"after {IDLE_EVERY_RUNS} runs"
+        else:
+            idle_reason = None
         if model != current_model:
             load_s = prepare_model(model, config)
             residency = model_residency(model, config)
@@ -351,6 +409,10 @@ def main():
                 tqdm.write(f"WARNING: {model} is partly on CPU ({residency['processor']})")
             llm = LLMClient(model, config=config)
             current_model = model
+        current_arch = arch
+        if idle_reason is not None:
+            idle_w = measure_idle(meta, meta_path, model, arch, idle_reason, number)
+            since_idle = 0
 
         progress.set_postfix_str(f"{model} {arch} {task['task_id']} s{seed}", refresh=False)
         try:
@@ -363,6 +425,7 @@ def main():
             print(f"Fix it, then continue with: run.py --tag {args.tag} --resume")
             return 1
         append_line(runs_path, row)
+        since_idle += 1
         successes += row["success"]
         if row["error"] and row["stop_reason"] == "exception":
             tqdm.write(f"run failed with an exception: {model} {arch} {task['task_id']} s{seed}: {row['error']}")

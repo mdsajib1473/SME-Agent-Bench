@@ -21,15 +21,20 @@ REQUIRED_FIELDS = (
     "wall_time_s", "llm_latency_s", "energy_wh", "net_energy_wh", "budget_exceeded",
     "llm_timeout", "stop_reason", "delegations", "replans", "policy_sha256", "tasks_sha256",
     "error", "dropped_tool_calls", "empty_reply", "prompt_sha256", "wrong_script",
-    "harness_sha256", "energy_counter_wh", "net_energy_counter_wh",
+    "harness_sha256", "energy_counter_wh", "net_energy_counter_wh", "energy_sampled_raw_wh",
+    "idle_w_used", "settle_seconds", "tail_w_before_run",
 )
 
 
 @pytest.fixture
 def fake_env(tmp_path, monkeypatch):
     """Point the runner at a temp results dir and replace every Ollama call."""
+    from telemetry import energy
+
     monkeypatch.setattr(run, "RESULTS_DIR", tmp_path)
     monkeypatch.setattr(run, "IDLE_SETTLE_S", 0)
+    monkeypatch.setattr(energy, "LAG_TAIL_S", 0.0)
+    monkeypatch.setattr(run, "settle_wait", lambda seconds: 20.0)
     monkeypatch.setattr(run, "check_ollama", lambda models, config: None)
     monkeypatch.setattr(run, "prepare_model", lambda model, config: 0.0)
     monkeypatch.setattr(run, "reset_model_state", lambda model, config: 0.01)
@@ -70,6 +75,14 @@ def test_records_every_run_with_all_fields_and_traces(fake_env, monkeypatch):
         assert (fake_env / "t" / row["trace_file"]).exists()
     meta = json.loads((fake_env / "t" / "meta.json").read_text(encoding="utf-8"))
     assert meta["idle_power_w"] == 12.5
+    config = run.load_config()
+    assert meta["settle_seconds"] == config["settle_seconds"] == 5
+    assert meta["power_lag_s"] == config["power_lag_s"]
+    assert [m["idle_w"] for m in meta["idle_measurements"]] == [12.5]
+    for row in rows:
+        assert row["idle_w_used"] == 12.5
+        assert row["settle_seconds"] == 5
+        assert row["tail_w_before_run"] == 20.0
     assert meta["policy_sha256"] == rows[0]["policy_sha256"]
     assert meta["tasks_sha256"] == rows[0]["tasks_sha256"]
     assert meta["harness_sha256"] == rows[0]["harness_sha256"]
@@ -110,6 +123,64 @@ def test_resume_refuses_when_policy_or_tasks_changed(fake_env, monkeypatch, caps
         assert key in capsys.readouterr().out
         meta[key] = original
         meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+
+def test_resume_refuses_when_settle_or_lag_changed(fake_env, monkeypatch, capsys):
+    assert invoke(monkeypatch, *ARGS) == 0
+    meta_path = fake_env / "t" / "meta.json"
+    for key in ("settle_seconds", "power_lag_s"):
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        original = meta["config"][key]
+        meta["config"][key] = original + 1
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        assert invoke(monkeypatch, *ARGS, "--resume") == 1
+        assert key in capsys.readouterr().out
+        meta["config"][key] = original
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    assert invoke(monkeypatch, *ARGS, "--resume") == 0
+
+
+def test_settle_wait_runs_before_every_run_with_the_config_value(fake_env, monkeypatch):
+    waits = []
+    monkeypatch.setattr(run, "settle_wait", lambda seconds: waits.append(seconds) or 15.0)
+    assert invoke(monkeypatch, *ARGS) == 0
+    assert waits == [run.load_config()["settle_seconds"]] * 4
+
+
+def test_idle_is_remeasured_at_start_on_arch_change_and_every_n_runs(fake_env, monkeypatch):
+    readings = iter([1.0, 2.0, 3.0, 4.0, 5.0])
+    monkeypatch.setattr(run, "measure_idle_power", lambda seconds: next(readings))
+    monkeypatch.setattr(run, "IDLE_EVERY_RUNS", 3)
+    args = ("--tag", "t", "--models", "fake-model", "--archs", "react", "plan_execute",
+            "--limit", "2", "--runs", "2")
+    assert invoke(monkeypatch, *args) == 0
+    rows = read_rows(fake_env / "t" / "runs.jsonl")
+    assert [row["arch"] for row in rows] == ["react"] * 4 + ["plan_execute"] * 4
+    assert [row["idle_w_used"] for row in rows] == [1.0, 1.0, 1.0, 2.0, 3.0, 3.0, 3.0, 4.0]
+    meta = json.loads((fake_env / "t" / "meta.json").read_text(encoding="utf-8"))
+    assert [m["reason"] for m in meta["idle_measurements"]] == [
+        "session start", "after 3 runs", "architecture change", "after 3 runs",
+    ]
+    assert [m["before_session_run"] for m in meta["idle_measurements"]] == [1, 4, 5, 8]
+    assert meta["idle_power_w"] == 1.0
+
+
+def test_settle_wait_returns_mean_power_of_the_last_two_seconds(monkeypatch):
+    class FakeMeter:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.ended = 10.0
+            self.samples = [(7.0, 40.0), (7.9, 40.0), (8.0, 20.0), (9.0, 10.0), (10.05, 12.0)]
+            return False
+
+    slept = []
+    monkeypatch.setattr(run, "EnergyMeter", FakeMeter)
+    monkeypatch.setattr(run.time, "sleep", slept.append)
+    assert run.settle_wait(5) == (20.0 + 10.0 + 12.0) / 3
+    assert slept == [5]
+    assert run.settle_wait(0) is None
 
 
 def test_agent_exception_is_recorded_and_the_runner_continues(fake_env, monkeypatch):
@@ -159,3 +230,18 @@ def test_wrong_script_is_recorded_per_run(fake_env, monkeypatch):
     assert invoke(monkeypatch, *ARGS) == 0
     rows = read_rows(fake_env / "t" / "runs.jsonl")
     assert [row["wrong_script"] for row in rows] == [False, True, False, False]
+
+
+def test_full_run_estimate_adds_settle_tail_and_idle_measurements():
+    from scripts.summarize_run import full_run_estimate
+
+    rows = [
+        {"model": "m", "arch": "react", "run_total_s": 10.0},
+        {"model": "m", "arch": "supervisor", "run_total_s": 20.0, "settle_seconds": 5},
+    ]
+    estimate = full_run_estimate(rows, ["m"], ["react", "supervisor"], per_combo=60, settle_s=5,
+                                 tail_s=1.0, idle_s=15, idle_every=25)
+    assert estimate["per_arch_s"][("m", "react")] == (10.0 + 6.0) * 60
+    assert estimate["per_arch_s"][("m", "supervisor")] == 20.0 * 60
+    assert estimate["idle_count"] == 2 * 3
+    assert estimate["total_s"] == 16.0 * 60 + 20.0 * 60 + 6 * 15

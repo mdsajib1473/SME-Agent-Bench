@@ -3,10 +3,12 @@
 Reads results/<tag>/runs.jsonl and meta.json and prints success, policy
 violations, timing and wrong-script replies (eval/script_check.py; read from
 the wrong_script field, or from the trace for older runs) per model
-and architecture, energy per model and architecture (net counter energy as the
-main figure, net sampled energy as the cross-check), reset time and malformed tool
-call rate per model, GPU placement per model, and an estimate for a full run
-from the measured per-run totals (reset included).
+and architecture, energy per model and architecture (net sampled energy, lag
+corrected, as the main figure, net counter energy as the cross-check), reset
+time and malformed tool call rate per model, GPU placement per model, and an
+estimate for a full run from the measured per-run totals (reset included),
+with the settle wait and the idle re-measurements of the current config added
+where the measured runs predate them.
 
 Usage (PowerShell):
     .venv\\Scripts\\python.exe scripts\\summarize_run.py --tag pilot
@@ -15,6 +17,7 @@ Usage (PowerShell):
 
 import argparse
 import json
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -23,7 +26,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import run
+from agents.llm import load_config
 from eval.script_check import is_wrong_script, non_latin_scripts
+from telemetry.energy import LAG_TAIL_S
 
 RESULTS_DIR = ROOT / "results"
 GPU_HOURS_LIMIT = 30
@@ -64,9 +70,11 @@ def counter_energy(row, idle_w):
 
 
 def print_energy(rows, idle_w):
-    print("energy per run, mean Wh. main: net_counter (NVML counter minus idle); cross-check: net_sampled")
-    print("model            arch          net_counter  net_sampled  counter  sampled  counter/sampled  no_counter")
+    print("energy per run, mean Wh. main: net_sampled (NVML power, lag corrected, minus idle);"
+          " cross-check: net_counter (NVML counter minus idle)")
+    print("model            arch          net_sampled  net_counter  sampled  raw_sampled  counter  counter/sampled  no_counter")
     derived = 0
+    uncorrected = sum("energy_sampled_raw_wh" not in row for row in rows)
     for (model, arch), mine in group(rows, "model", "arch").items():
         values = [counter_energy(row, idle_w) for row in mine]
         derived += sum(flag for _, _, flag in values)
@@ -75,16 +83,44 @@ def print_energy(rows, idle_w):
         ratios = [c / s for c, s in zip(counters, sampled) if c is not None and s]
         print(
             f"{model:<16} {arch:<13}"
-            f" {fmt(mean(n for _, n, _ in values), '.4f'):<12}"
             f" {fmt(mean(row['net_energy_wh'] for row in mine), '.4f'):<12}"
-            f" {fmt(mean(counters), '.4f'):<8}"
+            f" {fmt(mean(n for _, n, _ in values), '.4f'):<12}"
             f" {fmt(mean(sampled), '.4f'):<8}"
+            f" {fmt(mean(row.get('energy_sampled_raw_wh') for row in mine), '.4f'):<12}"
+            f" {fmt(mean(counters), '.4f'):<8}"
             f" {fmt(mean(ratios), '.3f'):<16}"
             f" {sum(c is None for c in counters)}"
         )
+    if uncorrected:
+        print(f"  {uncorrected} run(s) predate the lag correction; their sampled values are uncorrected")
     if derived:
         print(f"  {derived} run(s) predate net_energy_counter_wh; their net counter value uses wall_time_s as duration")
     print()
+
+
+def full_run_estimate(rows, models, archs, per_combo, settle_s, tail_s=LAG_TAIL_S,
+                      idle_s=run.IDLE_SETTLE_S + run.IDLE_SECONDS, idle_every=run.IDLE_EVERY_RUNS):
+    """Projected seconds for a full run, from the measured mean run_total_s per model and arch.
+
+    Runs recorded before the settle wait existed get settle_s plus the meter tail
+    added. Idle is measured at the start of every model and arch block and then
+    every idle_every runs, each measurement taking idle_s.
+    """
+    per_arch, added = {}, {}
+    for model in models:
+        for arch in archs:
+            mine = [row for row in rows if row["model"] == model and row["arch"] == arch]
+            extra = mean(0.0 if "settle_seconds" in row else settle_s + tail_s for row in mine) or 0.0
+            per_arch[(model, arch)] = ((mean(row["run_total_s"] for row in mine) or 0.0) + extra) * per_combo
+            added[(model, arch)] = extra * per_combo
+    idle_count = math.ceil(per_combo / idle_every) * len(models) * len(archs)
+    return {
+        "per_arch_s": per_arch,
+        "added_settle_s": added,
+        "idle_count": idle_count,
+        "idle_total_s": idle_count * idle_s,
+        "total_s": sum(per_arch.values()) + idle_count * idle_s,
+    }
 
 
 def mean(values):
@@ -226,21 +262,24 @@ def main():
 
     per_combo = args.full_tasks * args.full_seeds
     total_runs = per_combo * len(models) * len(archs)
+    settle_s = load_config()["settle_seconds"]
+    estimate = full_run_estimate(rows, models, archs, per_combo, settle_s)
     print(f"estimate for {args.full_tasks} tasks x {args.full_seeds} seeds x {len(models)} models x"
-          f" {len(archs)} archs = {total_runs} runs (from mean run_total_s, reset included)")
-    grand = 0.0
-    for (model,), mine in group(rows, "model").items():
-        model_s = 0.0
+          f" {len(archs)} archs = {total_runs} runs (from mean run_total_s, reset included;"
+          f" settle {settle_s} s and meter tail {LAG_TAIL_S} s added for runs recorded without them)")
+    for model in models:
+        model_s = sum(estimate["per_arch_s"][(model, arch)] for arch in archs)
         for arch in archs:
-            arch_rows = [row for row in mine if row["arch"] == arch]
-            seconds = (mean(row["run_total_s"] for row in arch_rows) or 0) * per_combo
-            model_s += seconds
-            print(f"  {model:<16} {arch:<13} {seconds / 3600:6.1f} h")
+            print(f"  {model:<16} {arch:<13} {estimate['per_arch_s'][(model, arch)] / 3600:6.1f} h")
+        mine = [row for row in rows if row["model"] == model]
         reset_share = (mean(row["reset_s"] for row in mine) or 0) * per_combo * len(archs)
-        print(f"  {model:<16} {'all':<13} {model_s / 3600:6.1f} h  (of which reset {reset_share / 3600:.1f} h)")
-        grand += model_s
-    print(f"  total {grand / 3600:.1f} h of GPU time")
-    if grand / 3600 > GPU_HOURS_LIMIT:
+        added = sum(estimate["added_settle_s"][(model, arch)] for arch in archs)
+        print(f"  {model:<16} {'all':<13} {model_s / 3600:6.1f} h  (of which reset {reset_share / 3600:.1f} h,"
+              f" added settle and tail {added / 3600:.1f} h)")
+    print(f"  idle measurements: {estimate['idle_count']} x {run.IDLE_SETTLE_S + run.IDLE_SECONDS} s ="
+          f" {estimate['idle_total_s'] / 3600:.2f} h")
+    print(f"  total {estimate['total_s'] / 3600:.1f} h of GPU time")
+    if estimate["total_s"] / 3600 > GPU_HOURS_LIMIT:
         print(f"  over the {GPU_HOURS_LIMIT} h target")
     return 0
 
