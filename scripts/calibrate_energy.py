@@ -13,8 +13,17 @@ block is recorded too, for comparison.
 
 Raw rows go to results/calibration/energy_blocks.csv; the summary is printed.
 
+With --settle only one phase runs after the idle measurement:
+  settle       reset_model_state (unload, load, warm-up), then a wait of 0, 3, 5,
+               8, 12 or 15 s, then a 10 s sleep-only EnergyMeter block, 8 repeats
+               per wait in seeded shuffled order. A second sampler records power
+               and the energy counter every 100 ms through wait and block, for the
+               power at the end of the wait and the aftermath curve.
+Output: energy_settle_blocks.csv, energy_settle_trace.csv, energy_settle_meta.json.
+
 Usage (PowerShell):
     .venv\\Scripts\\python.exe scripts\\calibrate_energy.py
+    .venv\\Scripts\\python.exe scripts\\calibrate_energy.py --settle
 """
 
 import argparse
@@ -23,6 +32,7 @@ import json
 import random
 import statistics
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -54,6 +64,23 @@ FIELDS = (
     "counter_wh", "sampled_wh", "idle_power_w", "counter_net_wh", "sampled_net_wh",
     "counter_minus_sampled_j", "samples", "reset_s", "success",
 )
+
+SETTLE_WAITS_S = (0.0, 3.0, 5.0, 8.0, 12.0, 15.0)
+SETTLE_REPEATS = 8
+SETTLE_BLOCK_S = 10.0
+SETTLE_TAIL_S = 2.0
+SETTLE_TARGET_J = 10.0
+AFTERMATH_LENGTHS_S = (0.5, 1.0, 2.0, 3.0, 5.0, 7.5, 10.0)
+TRACE_INTERVAL_S = 0.1
+SETTLE_CSV_PATH = OUT_DIR / "energy_settle_blocks.csv"
+SETTLE_TRACE_PATH = OUT_DIR / "energy_settle_trace.csv"
+SETTLE_META_PATH = OUT_DIR / "energy_settle_meta.json"
+SETTLE_FIELDS = (
+    "phase", "order", "wait_s", "block_s", "repeat", "duration_s", "counter_wh", "sampled_wh",
+    "idle_power_w", "counter_net_wh", "sampled_net_wh", "counter_minus_sampled_j", "samples",
+    "reset_s", "wait_tail_counter_w", "wait_tail_reported_w",
+)
+TRACE_FIELDS = ("order", "wait_s", "repeat", "segment", "t_s", "reported_w", "counter_mj")
 
 
 def block_row(phase, order, block_s, repeat, meter, idle_w, reset_s=None):
@@ -89,9 +116,9 @@ def shuffled(repeats):
 class RowWriter:
     """Appends each row to the CSV as soon as it exists, so a crash keeps the data."""
 
-    def __init__(self, path):
+    def __init__(self, path, fields=FIELDS):
         self.handle = path.open("w", newline="", encoding="utf-8")
-        self.writer = csv.DictWriter(self.handle, fieldnames=FIELDS)
+        self.writer = csv.DictWriter(self.handle, fieldnames=fields)
         self.writer.writeheader()
         self.rows = []
 
@@ -122,6 +149,149 @@ def gpu_processes():
         return None
 
 
+class TraceSampler:
+    """Reported power and energy counter every 100 ms on its own NVML session."""
+
+    def __init__(self):
+        import pynvml
+
+        self.nvml = pynvml
+        pynvml.nvmlInit()
+        self.handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        self.rows = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+    def _sample(self):
+        self.rows.append((
+            time.perf_counter(),
+            self.nvml.nvmlDeviceGetPowerUsage(self.handle) / 1000.0,
+            self.nvml.nvmlDeviceGetTotalEnergyConsumption(self.handle),
+        ))
+
+    def _loop(self):
+        self._sample()
+        while not self._stop.wait(TRACE_INTERVAL_S):
+            self._sample()
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._stop.set()
+        self._thread.join()
+        self.nvml.nvmlShutdown()
+        return False
+
+    def counter_j_at(self, t):
+        """Counter in joules at time t, linearly interpolated between samples."""
+        rows = self.rows
+        for (t0, _, e0), (t1, _, e1) in zip(rows, rows[1:]):
+            if t0 <= t <= t1:
+                return (e0 + (e1 - e0) * (t - t0) / (t1 - t0)) / 1000.0
+        return None
+
+    def tail_powers(self, t_start, t_end):
+        """Counter-derived and mean reported power between two times."""
+        e0, e1 = self.counter_j_at(t_start), self.counter_j_at(t_end)
+        counter_w = (e1 - e0) / (t_end - t_start) if e0 is not None and e1 is not None else None
+        reported = [w for t, w, _ in self.rows if t_start <= t <= t_end]
+        return counter_w, statistics.mean(reported) if reported else None
+
+
+def settle_plan():
+    plan = [(wait, repeat) for wait in SETTLE_WAITS_S for repeat in range(1, SETTLE_REPEATS + 1)]
+    random.Random(SHUFFLE_SEED).shuffle(plan)
+    return plan
+
+
+def settle_phase(config, idle_w, counter_idle_w):
+    out = RowWriter(SETTLE_CSV_PATH, SETTLE_FIELDS)
+    trace_out = RowWriter(SETTLE_TRACE_PATH, TRACE_FIELDS)
+    aftermath = {}
+    plan = settle_plan()
+    print(f"settle phase: {len(plan)} blocks of {SETTLE_BLOCK_S:.0f} s after reset and a wait")
+    for order, (wait, repeat) in enumerate(plan, start=1):
+        reset_s = reset_model_state(MODEL, config)
+        model_residency(MODEL, config)
+        with TraceSampler() as sampler:
+            t_wait = time.perf_counter()
+            time.sleep(wait)
+            with Shop():
+                t_block = time.perf_counter()
+                meter = sleep_block(SETTLE_BLOCK_S)
+            time.sleep(TRACE_INTERVAL_S * 2)
+        tail_counter_w, tail_reported_w = (None, None)
+        if wait >= SETTLE_TAIL_S:
+            tail_counter_w, tail_reported_w = sampler.tail_powers(t_block - SETTLE_TAIL_S, t_block)
+        row = block_row("settle", order, SETTLE_BLOCK_S, repeat, meter, idle_w, reset_s)
+        del row["task_id"], row["seed"], row["success"]
+        row.update(wait_s=wait, wait_tail_counter_w=tail_counter_w, wait_tail_reported_w=tail_reported_w)
+        out.add(row)
+        for t, reported_w, counter_mj in sampler.rows:
+            trace_out.add({
+                "order": order, "wait_s": wait, "repeat": repeat,
+                "segment": "wait" if t < t_block else "block",
+                "t_s": round(t - t_block, 4), "reported_w": reported_w, "counter_mj": counter_mj,
+            })
+        start_j = sampler.counter_j_at(t_block)
+        aftermath.setdefault(wait, []).append({
+            length: (sampler.counter_j_at(t_block + length) - start_j) - idle_w * length
+            for length in AFTERMATH_LENGTHS_S
+            if start_j is not None and sampler.counter_j_at(t_block + length) is not None
+        })
+        print(f"  {order:>2}/{len(plan)} wait {wait:>4.0f} s: counter net"
+              f" {joules(row['counter_net_wh']):6.1f} J, waited {t_block - t_wait:5.2f} s")
+    out.close()
+    trace_out.close()
+    rows = out.rows
+
+    SETTLE_META_PATH.write_text(json.dumps({
+        "model": MODEL, "idle_power_w": idle_w, "idle_counter_power_w": counter_idle_w,
+        "idle_seconds": run.IDLE_SECONDS, "waits_s": SETTLE_WAITS_S, "repeats": SETTLE_REPEATS,
+        "block_s": SETTLE_BLOCK_S, "tail_s": SETTLE_TAIL_S, "target_j": SETTLE_TARGET_J,
+        "shuffle_seed": SHUFFLE_SEED, "trace_interval_s": TRACE_INTERVAL_S,
+        "aftermath_net_counter_j": {
+            str(wait): {
+                str(length): [run_curve.get(length) for run_curve in curves]
+                for length in AFTERMATH_LENGTHS_S
+            }
+            for wait, curves in sorted(aftermath.items())
+        },
+    }, indent=2), encoding="utf-8")
+    print(f"raw data written to {SETTLE_CSV_PATH.relative_to(ROOT)} and {SETTLE_TRACE_PATH.relative_to(ROOT)}")
+    print()
+
+    print(f"10 s sleep-only block after reset and wait; idle {idle_w:.3f} W; joules, mean +/- sd")
+    print("wait_s  n   counter net          sampled net          tail counter W   tail reported W")
+    recommended = None
+    for wait in SETTLE_WAITS_S:
+        mine = [r for r in rows if r["wait_s"] == wait]
+        counter_net = [joules(r["counter_net_wh"]) for r in mine]
+        print(
+            f"{wait:<7.0f} {len(mine):<3}"
+            f" {stats(counter_net):<20}"
+            f" {stats(joules(r['sampled_net_wh']) for r in mine):<20}"
+            f" {stats(r['wait_tail_counter_w'] for r in mine):<16}"
+            f" {stats(r['wait_tail_reported_w'] for r in mine)}"
+        )
+        if recommended is None and statistics.mean(counter_net) < SETTLE_TARGET_J:
+            recommended = wait
+    print()
+    if recommended is not None:
+        print(f"recommended wait: {recommended:.0f} s (first wait with mean counter net under {SETTLE_TARGET_J:.0f} J)")
+    else:
+        print(f"no wait up to {max(SETTLE_WAITS_S):.0f} s brings the mean counter net under {SETTLE_TARGET_J:.0f} J")
+    print()
+    print("aftermath curve: counter net energy (J) from block start, by wait")
+    print("wait_s  " + "  ".join(f"{length:>12}" for length in AFTERMATH_LENGTHS_S))
+    for wait, curves in sorted(aftermath.items()):
+        cells = [stats(curve.get(length) for curve in curves) for length in AFTERMATH_LENGTHS_S]
+        print(f"{wait:<7.0f} " + "  ".join(f"{cell:>12}" for cell in cells))
+    return 0
+
+
 def joules(value_wh):
     return None if value_wh is None else value_wh * 3600.0
 
@@ -136,13 +306,16 @@ def stats(values):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.parse_args()
+    parser.add_argument("--settle", action="store_true", help="run only the settle phase")
+    args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     config = load_config()
 
-    if CSV_PATH.exists():
-        print(f"STOP: {CSV_PATH.relative_to(ROOT)} already exists; move it before rerunning.")
-        return 1
+    outputs = (SETTLE_CSV_PATH, SETTLE_TRACE_PATH, SETTLE_META_PATH) if args.settle else (CSV_PATH,)
+    for path in outputs:
+        if path.exists():
+            print(f"STOP: {path.relative_to(ROOT)} already exists; move it before rerunning.")
+            return 1
     problem = run.check_ollama([MODEL], config)
     if problem:
         print(f"STOP: {problem}")
@@ -163,6 +336,8 @@ def main():
     print(f"idle power (sampled mean, used for all net values): {idle_w:.3f} W;"
           f" counter over the same 30 s: {counter_idle_w if counter_idle_w is None else round(counter_idle_w, 3)} W")
     print(f"GPU compute processes (pid, MiB): {gpu_processes()}")
+    if args.settle:
+        return settle_phase(config, idle_w, counter_idle_w)
 
     out = RowWriter(CSV_PATH)
     rows = out.rows

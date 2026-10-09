@@ -1,0 +1,73 @@
+﻿loaded qwen2.5-7b-8k in 4.4 s; measuring idle power for 30 s as run.py does...
+idle power (sampled mean, used for all net values): 11.044 W; counter over the same 30 s: 10.964 W
+GPU compute processes (pid, MiB): [(1916, 0.0), (14016, 0.0), (14180, 0.0), (13000, 0.0), (11976, 0.0), (10876, 0.0), (5288, 0.0), (13884, 0.0), (14508, 0.0), (24164, 0.0), (3068, 0.0), (24260, 0.0), (26224, 0.0), (23028, 0.0), (13984, 0.0), (27584, 0.0), (22856, 0.0), (16084, 0.0), (29472, 0.0), (23392, 0.0), (27264, 0.0), (19652, 0.0), (22476, 0.0), (3476, 0.0)]
+settle phase: 48 blocks of 10 s after reset and a wait
+   1/48 wait    0 s: counter net   66.1 J, waited  0.00 s
+   2/48 wait   12 s: counter net  -48.5 J, waited 12.00 s
+   3/48 wait   12 s: counter net  -48.6 J, waited 12.00 s
+   4/48 wait    0 s: counter net   42.8 J, waited  0.00 s
+   5/48 wait    5 s: counter net  -46.2 J, waited  5.00 s
+   6/48 wait    5 s: counter net  -48.7 J, waited  5.00 s
+   7/48 wait    3 s: counter net  -37.4 J, waited  3.00 s
+   8/48 wait    3 s: counter net  -47.3 J, waited  3.00 s
+   9/48 wait    0 s: counter net   56.3 J, waited  0.00 s
+  10/48 wait    8 s: counter net  -49.9 J, waited  8.00 s
+  11/48 wait   15 s: counter net  -51.0 J, waited 15.00 s
+  12/48 wait   15 s: counter net  -22.6 J, waited 15.00 s
+  13/48 wait   15 s: counter net   -0.1 J, waited 15.00 s
+  14/48 wait    0 s: counter net   72.8 J, waited  0.00 s
+  15/48 wait   15 s: counter net   -0.2 J, waited 15.00 s
+  16/48 wait    3 s: counter net   14.7 J, waited  3.00 s
+  17/48 wait    5 s: counter net    0.8 J, waited  5.00 s
+  18/48 wait    8 s: counter net    0.7 J, waited  8.00 s
+  19/48 wait    3 s: counter net    4.2 J, waited  3.00 s
+  20/48 wait    3 s: counter net    7.0 J, waited  3.00 s
+  21/48 wait   15 s: counter net    1.0 J, waited 15.00 s
+  22/48 wait    0 s: counter net   80.1 J, waited  0.00 s
+  23/48 wait    3 s: counter net   18.2 J, waited  3.00 s
+  24/48 wait    0 s: counter net   78.3 J, waited  0.00 s
+  25/48 wait   12 s: counter net    1.4 J, waited 12.00 s
+  26/48 wait    8 s: counter net    2.6 J, waited  8.00 s
+  27/48 wait   12 s: counter net    0.8 J, waited 12.00 s
+  28/48 wait    5 s: counter net    1.8 J, waited  5.00 s
+  29/48 wait   12 s: counter net    0.9 J, waited 12.00 s
+  30/48 wait   15 s: counter net    3.1 J, waited 15.00 s
+  31/48 wait   15 s: counter net    2.8 J, waited 15.00 s
+  32/48 wait    0 s: counter net   86.6 J, waited  0.00 s
+  33/48 wait   12 s: counter net    1.2 J, waited 12.00 s
+  34/48 wait    5 s: counter net    1.1 J, waited  5.00 s
+  35/48 wait    3 s: counter net   19.5 J, waited  3.00 s
+  36/48 wait   15 s: counter net    2.7 J, waited 15.00 s
+  37/48 wait    3 s: counter net   17.5 J, waited  3.00 s
+  38/48 wait   12 s: counter net    3.0 J, waited 12.00 s
+  39/48 wait    5 s: counter net    2.6 J, waited  5.00 s
+  40/48 wait    8 s: counter net    3.1 J, waited  8.00 s
+  41/48 wait    5 s: counter net    2.6 J, waited  5.00 s
+  42/48 wait    8 s: counter net    2.5 J, waited  8.00 s
+  43/48 wait    8 s: counter net    3.4 J, waited  8.00 s
+  44/48 wait   12 s: counter net    3.0 J, waited 12.00 s
+  45/48 wait    5 s: counter net    3.2 J, waited  5.00 s
+  46/48 wait    0 s: counter net   90.0 J, waited  0.00 s
+  47/48 wait    8 s: counter net    4.0 J, waited  8.00 s
+  48/48 wait    8 s: counter net    4.0 J, waited  8.00 s
+raw data written to results\calibration\energy_settle_blocks.csv and results\calibration\energy_settle_trace.csv
+
+10 s sleep-only block after reset and wait; idle 11.044 W; joules, mean +/- sd
+wait_s  n   counter net          sampled net          tail counter W   tail reported W
+0       8       71.6 +/-  15.9      122.4 +/-   9.1   n/a              n/a
+3       8       -0.5 +/-  26.5       43.7 +/-  13.6       36.2 +/-   1.1     40.5 +/-   0.3
+5       8      -10.3 +/-  22.9       12.6 +/-  10.4       13.9 +/-   3.8     26.6 +/-   2.8
+8       8       -3.7 +/-  18.7       17.5 +/-  11.8       13.3 +/-   8.9     16.1 +/-   9.9
+12      8      -10.8 +/-  23.3       11.9 +/-   9.8       10.4 +/-   2.0     12.5 +/-   0.8
+15      8       -8.0 +/-  19.3       12.1 +/-   8.8        9.8 +/-   2.5     12.1 +/-   1.1
+
+recommended wait: 3 s (first wait with mean counter net under 10 J)
+
+aftermath curve: counter net energy (J) from block start, by wait
+wait_s           0.5           1.0           2.0           3.0           5.0           7.5          10.0
+0           12.9 +/-   2.1      26.3 +/-   0.6      52.1 +/-   1.9      75.8 +/-   2.9      80.7 +/-   8.2      76.4 +/-  10.8      71.7 +/-  16.1
+3            8.9 +/-   4.7      10.1 +/-   5.9       9.7 +/-   7.9       8.8 +/-   9.7       6.1 +/-  14.1       3.4 +/-  20.0       0.3 +/-  26.3
+5           -0.4 +/-   0.7      -0.8 +/-   2.0      -1.6 +/-   4.0      -2.9 +/-   6.2      -5.2 +/-  11.0      -7.7 +/-  16.5     -10.2 +/-  23.1
+8           -0.0 +/-   1.0      -0.5 +/-   2.1      -1.0 +/-   3.8      -1.4 +/-   5.5      -1.6 +/-   9.6      -2.9 +/-  14.1      -3.6 +/-  18.8
+12          -0.9 +/-   1.9      -1.3 +/-   2.4      -2.2 +/-   4.9      -3.3 +/-   7.4      -5.8 +/-  12.4      -8.3 +/-  18.0     -10.8 +/-  23.4
+15          -0.3 +/-   1.4      -1.1 +/-   2.5      -2.2 +/-   5.4      -3.3 +/-   7.7      -5.3 +/-  12.2      -6.4 +/-  15.8      -7.8 +/-  19.3
