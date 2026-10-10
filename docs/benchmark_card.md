@@ -1,8 +1,7 @@
 # Benchmark card: sme-agent-bench
 
-Numbers come from env/, tasks/ and config.yaml. Numbers marked (M) describe the merged
-80 task set (tasks/tasks.jsonl plus tasks/tasks_draft.jsonl) and are to be updated after
-the merge.
+Numbers come from env/, tasks/ and config.yaml. Task numbers describe the final reviewed
+80 task set in tasks/tasks.jsonl.
 
 ## Environment
 
@@ -22,9 +21,9 @@ the merge.
   it; on a mismatch, refuse and open no ticket.
 * Cancellation only while pending or confirmed; a shipped order gets a logistics ticket
   instead. Address change only before shipping; quantity change only while pending and
-  within stock.
-* Refunds only for delivered orders within 7 days, never above the order total, to the
-  payment method (cash on delivery refunds go to bKash); damage outside the window gets a
+  within stock; the phone number on an order is never changed.
+* Refunds only for delivered orders within 7 days, never above the order total (the
+  amount paid, including delivery), to the payment method (cash on delivery refunds go to bKash); damage outside the window gets a
   high priority product_quality ticket instead.
 * Delivery charge 60 BDT in Dhaka, 120 BDT outside, free from a 3000 BDT pre discount subtotal.
 * Bulk quotes: 0 percent below 10 units, 5 percent for 10 to 49, 10 percent from 50; never above 10.
@@ -32,7 +31,7 @@ the merge.
 * Complaints routed to logistics, billing, product_quality or general; high priority for
   damage or a shipping delay of more than 5 days.
 
-## Task distribution (M)
+## Task distribution
 
 * 80 single turn tasks, 16 per category: refund, order_change, complaint_routing,
   quotation, inquiry.
@@ -46,8 +45,8 @@ the merge.
   shipped order, change after shipping, insufficient stock, discount above the band,
   expired coupon, coupon below the minimum.
 * Gold write actions per task: none for 20 tasks, one for 52, two for 1, three for 7.
-* Current approved file tasks/tasks.jsonl (used by the pilots): 10 tasks, 7 English and
-  3 Banglish, 4 traps.
+* The pilots used an earlier 10 task file (7 English, 3 Banglish, 4 traps) whose tasks
+  are part of the final set (REF-E-01 was reworded during review).
 
 ## Scoring [eval/scorer.py]
 
@@ -56,7 +55,7 @@ success = state_match and output_match and not policy_violation and not empty_re
 * state_match: the gold actions are replayed on a fresh shop and the whole database is
   compared with the agent's final state (free text columns ignored).
 * output_match: every required value appears in the reply (case and thousands separators
-  ignored); 51 tasks have at least one required value (M).
+  ignored); 51 tasks have at least one required value.
 * policy_violation: a forbidden write that succeeded, optionally only under an argument
   condition; a call that returned an error is not a violation.
 * empty_reply: an empty reply fails the task, even when doing nothing was correct.

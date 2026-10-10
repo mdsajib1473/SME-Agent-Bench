@@ -138,9 +138,6 @@ class TestDroppedAtClient:
         assert llm.totals["llm_calls"] == 1
 
 
-DRAFT_TASKS_PATH = ROOT / "tasks" / "tasks_draft.jsonl"
-
-
 class TestLanguageRule:
     def test_shared_prompt_states_the_script_rule(self):
         shared = build_shared_prompt(load_policy())
@@ -218,10 +215,11 @@ class TestToolStateChecks:
             assert cancel_order(shop, _first_order(shop, "shipped"), "late")["ok"]
             assert issue_refund(shop, _first_order(shop, "pending"), 100, "card", "x")["ok"]
 
-    def test_gold_replays_oracle_and_validators_pass_on_every_task_file(self, capsys):
-        tasks = scorer.load_tasks() + scorer.load_tasks(DRAFT_TASKS_PATH)
+    def test_gold_replays_oracle_and_validators_pass_on_the_task_file(self, capsys):
+        tasks = scorer.load_tasks()
+        assert len(tasks) == 80
         assert validate_tasks.replay_check(tasks) == []
-        assert validate_tasks.main([str(scorer.TASKS_PATH), str(DRAFT_TASKS_PATH)]) == 0
+        assert validate_tasks.main([str(scorer.TASKS_PATH)]) == 0
         assert "validation: PASS" in capsys.readouterr().out
 
 

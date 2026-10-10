@@ -23,8 +23,8 @@ Repository link for review: anonymous link (to be added).
 * **Tasks.** 80 single turn customer messages in English or Banglish (Bangla written in
   Latin letters), in five categories, three difficulty levels, with trap tasks where the
   correct behaviour is to refuse or to do something other than what the customer asks
-  [tasks/]. The 80 task set is still being merged: 10 approved tasks are in
-  tasks/tasks.jsonl and 70 drafts in tasks/tasks_draft.jsonl (to be updated after the merge).
+  [tasks/]. All 80 tasks were reviewed by two authors and are in tasks/tasks.jsonl.
+  tasks/tasks_draft.jsonl keeps the 70 drafts as they were before review.
 * **Scoring.** By the final state of the shop database, not by the conversation: the gold
   actions are replayed on a fresh shop and the whole database is compared with the
   agent's final state. A task succeeds when the state matches, every required value
@@ -38,7 +38,7 @@ design decision.
 
 * CPU AMD Ryzen 7 7700, GPU NVIDIA GeForce RTX 3060 12 GB (driver 616.92), Windows 11.
 * Python 3.11.9.
-* Ollama 0.35.1 for the frozen pilot runs. The runner records the Ollama version of every
+* Ollama 0.40.2 for the main run. The runner records the Ollama version of every
   run in results/<tag>/meta.json; check it before comparing runs.
 * Models, both Q4_K_M quantized as distributed by Ollama:
   * `qwen2.5-7b-8k`, built from `qwen2.5:7b` (Ollama IDs 30edf3b19f51 for the tag, 845dbda0ea48 for the base)
@@ -146,15 +146,18 @@ that does nothing may pass only the traps whose correct behaviour is to do nothi
 
 The review record is kept in tasks/:
 
-* review_sheet.csv lists every task with its message, notes, gold actions, required
-  outputs and forbidden actions, plus three review columns: a reviewer code (never a
-  name), the approval decision and a comment.
+* review_sheet.csv is the blank review sheet: every task with its message, notes, gold
+  actions, required outputs and forbidden actions, plus empty review columns.
+* review_log.csv is the record of the review: one row per task with a reviewer code (R1
+  or R2, never a name), the approval decision and the reviewer comment.
+* review_pending.md lists rows still unresolved after the merge (none) and how each row
+  marked not approved was resolved.
 * db_snapshot.csv gives the reviewer a plain English view of the seed database rows each
   task depends on (built by scripts/task_generation/build_snapshot.py).
 * review_replacements.csv holds replacement drafts for tasks withdrawn during review.
 * distribution_report.md summarises the distribution of the merged set.
 
-Approved tasks move to tasks/tasks.jsonl. Banglish messages were written by the authors.
+Approved tasks are in tasks/tasks.jsonl. Banglish messages were written by the authors.
 
 ## License
 

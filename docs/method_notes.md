@@ -5,7 +5,7 @@ The file or setting each value comes from is given in brackets.
 
 ## Models and serving
 
-* Ollama 0.35.1, OpenAI compatible endpoint `http://localhost:11434/v1` [config.yaml].
+* Ollama 0.40.2, OpenAI compatible endpoint `http://localhost:11434/v1` [config.yaml].
 * Two model tags built from Modelfiles [models/]:
   * `qwen2.5-7b-8k` from `qwen2.5:7b` (Ollama IDs 30edf3b19f51 for the tag, 845dbda0ea48 for the base).
   * `qwen2.5-14b-8k` from `qwen2.5:14b` (Ollama IDs 3b962add16b4 for the tag, 7cdf5a0187d5 for the base).
@@ -121,11 +121,15 @@ success = state_match and output_match and not policy_violation and not empty_re
 
 Hashes are SHA256 over the decoded UTF8 text, so CRLF and LF checkouts agree. Each is stored in meta.json and in every runs.jsonl line. The runner refuses to resume a run directory if any hash, any fairness setting in config.yaml (call budget, token cap, temperature, seeds) or any energy measurement setting (`settle_seconds`, `power_lag_s`) changed. The energy measurement settings are not part of harness_sha256.
 
-* policy_sha256: `108c9136b218c6b16ced3ae58f5f5fb4ff053baa4ca5b5889041b98f3f62aade` (env/policy.md).
-* prompt_sha256: `6c5bdb1a99ca4ee6d0b8ac63194c33d495f2e400ca940d8505d5a64c9efbeb29` (the shared system prompt only).
-* harness_sha256: `a1f94412682cb3ad393f81964c861f2d4f82db08c6fc46b8433a1cffee87678e` [agents/harness.py]. One hash over the shared prompt, every role prompt and fixed per role instruction of the three architectures (planner, executor, responder, supervisor, specialists), the specialist and shop tool schemas, the source of eval/scorer.py, the call budget, token cap and temperature from config.yaml, and the iteration, step, delegation and replan limits. Seeds and the model list are not part of it.
-* tasks_sha256: to be filled in once all 80 tasks are merged into tasks/tasks.jsonl. The 10 task pilot file is `74fb7fde4d69428465e5566d30f332331c8e800fcfd0fc590ceb8e3ffc2a792d`.
+* policy_sha256: `afb5e8f6b705211fd126a10d66752257f313a8b203f69f2efab1d26076e8ba5c` (env/policy.md).
+* prompt_sha256: `1e21e82ffaad58cdbb6e6fd197609f8813f7ea316b4be14fa78d66b03a32d86e` (the shared system prompt only).
+* harness_sha256: `70cf0f7a774f072822a684519a4b42eef9487ce349aa780d0c40ab34e61023a5` [agents/harness.py]. One hash over the shared prompt, every role prompt and fixed per role instruction of the three architectures (planner, executor, responder, supervisor, specialists), the specialist and shop tool schemas, the source of eval/scorer.py, the call budget, token cap and temperature from config.yaml, and the iteration, step, delegation and replan limits. Seeds and the model list are not part of it.
+* tasks_sha256: `9d33b0aaf9af811de5430c14f31646844d6b7fb57867d9c90dc5ff473354cdb8` (tasks/tasks.jsonl, all 80 tasks). The 10 task pilot file was `74fb7fde4d69428465e5566d30f332331c8e800fcfd0fc590ceb8e3ffc2a792d`.
 
 ## Change after pilot3
 
 The Plan and Execute responder message lost its own English or Banglish instruction after pilot3, so every architecture now relies only on the shared language rule. pilot3 Plan and Execute runs still had that instruction. The change is outside the shared prompt, so prompt_sha256 did not change. harness_sha256 was introduced afterwards and is not recorded for pilot3.
+
+## Change at the task merge (2026-10-11)
+
+The 80 reviewed tasks were merged into tasks/tasks.jsonl before the main run, with one authorized policy edit. env/policy.md gained two additions: the refunds section now states that the refundable amount is the full amount the customer paid, including the delivery charge, and the address change section now states that phone numbers on an order cannot be changed through this channel (refuse and take no action). policy_sha256, prompt_sha256 and harness_sha256 changed as a result; the values above are the new ones. Pilot runs used the earlier policy and the 10 task file and are not reported.

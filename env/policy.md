@@ -55,6 +55,9 @@ shipped, meaning while the status is pending or confirmed.
 If the status is shipped, delivered, cancelled, or returned, refuse the change
 and take no action. Do not open a ticket for this.
 
+Phone numbers on an order cannot be changed through this channel. Refuse and
+take no action.
+
 ## Quantity Change
 
 The quantity on an order may be changed only while the order is pending, and
@@ -68,7 +71,9 @@ for either case.
 ## Refunds
 
 A refund is allowed only for delivered orders, and only inside the 7-day refund
-window. The refund amount may never exceed the order total.
+window. The refund amount may never exceed the order total. The refundable
+amount is the full amount the customer paid for the order, including the
+delivery charge.
 
 The window is measured as the fixed clock minus the order's delivered_at value.
 An order is inside the window when that difference is 7 days or less, so an age

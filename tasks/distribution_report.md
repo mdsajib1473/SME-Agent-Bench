@@ -1,6 +1,6 @@
 # Task distribution report
 
-Merged set: 80 tasks, 10 approved in `tasks.jsonl` and 70 awaiting review in `tasks_draft.jsonl`.
+Final set: 80 tasks in `tasks.jsonl`, all reviewed and approved (review record in `review_log.csv`).
 
 ## Category by difficulty
 
@@ -65,10 +65,10 @@ Tasks with 3 or more write actions in a fixed order: 7. Of the 20 hard tasks, 7 
 
 ## Order id reuse
 
-55 distinct order ids appear across the instructions. Reuse counts: 1 task(s): 43 ids, 2 task(s): 12 ids.
+56 distinct order ids appear across the instructions. Reuse counts: 1 task(s): 45 ids, 2 task(s): 11 ids.
 
 No order id appears in more than 3 tasks.
 
 ## Validator result
 
-`python eval/validate_tasks.py tasks/tasks.jsonl tasks/tasks_draft.jsonl` reports 0 schema or replay problems, a 100 percent oracle success rate, and an 8 percent no-op success rate that matches the share of do-nothing traps exactly.
+`python eval/validate_tasks.py tasks/tasks.jsonl` reports 0 schema or replay problems, a 100 percent oracle success rate, a 0 percent silent oracle success rate, and an 8 percent no-op success rate (6 of 80) that matches the share of do-nothing traps exactly.

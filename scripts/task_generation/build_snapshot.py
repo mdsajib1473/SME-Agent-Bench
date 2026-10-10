@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-TASK_FILES = [ROOT / "tasks" / "tasks.jsonl", ROOT / "tasks" / "tasks_draft.jsonl"]
+TASK_FILES = [ROOT / "tasks" / "tasks.jsonl"]
 OUT = ROOT / "tasks" / "db_snapshot.csv"
 CLOCK = datetime(2026, 10, 1, 10, 0, tzinfo=timezone(timedelta(hours=6)))
 

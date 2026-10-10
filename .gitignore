@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 scripts/anonymity_terms.local.txt
+tasks/reviews/
+Prompt_Merge_and_Final_Check.md

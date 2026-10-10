@@ -1,0 +1,81 @@
+task_id,reviewer_code,approved,comment
+CMP-E-01,R1,yes,OK
+CMP-E-02,R1,yes,OK
+CMP-E-03,R2,yes,OK
+CMP-E-04,R1,yes,OK
+CMP-E-05,R2,yes,"OK. Billing problem. Everything correct in instructions, notes, gold actions."
+CMP-E-06,R2,yes,OK. General problem about packaging
+CMP-H-01,R1,yes,"Phone number doesn't match database, claims he is buyer's husband"
+CMP-H-02,R2,yes,OK
+CMP-H-03,R2,yes,"Phone number doesn't match database, says he's customer's husband"
+CMP-H-04,R2,yes,OK
+CMP-M-01,R1,yes,OK
+CMP-M-02,R2,yes,OK
+CMP-M-03,R2,yes,OK
+CMP-M-04,R2,yes,OK
+CMP-M-05,R2,yes,"OK. Billed twice, asks for refund, no specific policy"
+CMP-M-06,R2,yes,OK
+INQ-E-01,R1,yes,OK
+INQ-E-02,R2,yes,Add how many units to the instructions
+INQ-E-03,R2,yes,OK
+INQ-E-04,R2,yes,OK
+INQ-E-05,R2,yes,Add how many to the instructions
+INQ-E-06,R2,yes,Add how many to the instructions
+INQ-H-01,R2,yes,"Phone number doesn't match database, says he's customer's brother"
+INQ-H-02,R2,yes,"Order date not mentioned in database, so can't verify"
+INQ-H-03,R2,yes,OK
+INQ-H-04,R2,yes,OK
+INQ-M-01,R2,yes,OK
+INQ-M-02,R2,yes,OK
+INQ-M-03,R2,yes,OK
+INQ-M-04,R2,yes,OK
+INQ-M-05,R2,yes,OK
+INQ-M-06,R2,yes,OK
+ORD-E-01,R1,yes,OK
+ORD-E-02,R1,yes,OK
+ORD-E-03,R1,yes,OK
+ORD-E-04,R1,yes,OK
+ORD-E-05,R1,yes,OK
+ORD-E-06,R1,yes,OK
+ORD-H-01,R1,yes,OK
+ORD-H-02,R2,no,Don't know what was the previous order of ORD-1039
+ORD-H-03,R1,yes,OK
+ORD-H-04,R1,yes,OK
+ORD-M-01,R1,yes,OK
+ORD-M-02,R2,yes,Removed Hint: my sister wants two as well.
+ORD-M-03,R2,no,Policy ambiguous. It doesn't tell how to round a decimal number.
+ORD-M-04,R1,yes,OK
+ORD-M-05,R1,yes,OK
+ORD-M-06,R1,yes,OK
+QUO-E-01,R2,yes,OK. No phone number found in database
+QUO-E-02,R2,yes,OK. No phone number found in database
+QUO-E-03,R2,yes,OK. No phone number found in database
+QUO-E-04,R2,yes,OK. No phone number found in database
+QUO-E-05,R2,yes,OK. No phone number found in database
+QUO-E-06,R2,yes,OK. No phone number found in database
+QUO-H-01,R1,yes,OK. No phone number found in database
+QUO-H-02,R2,yes,Add delivery location to the instructions
+QUO-H-03,R2,yes,OK. No phone number found in database
+QUO-H-04,R2,yes,OK
+QUO-M-01,R1,yes,OK. No phone number found in database
+QUO-M-02,R2,yes,OK. No phone number found in database
+QUO-M-03,R2,yes,OK. No phone number found in database
+QUO-M-04,R2,yes,OK. No phone number found in database
+QUO-M-05,R2,yes,OK. No phone number found in database
+QUO-M-06,R2,yes,OK. No phone number found in database
+REF-E-01,R1,yes,OK
+REF-E-02,R1,yes,OK
+REF-E-03,R1,yes,OK
+REF-E-04,R1,yes,OK
+REF-E-05,R1,no,"Order total is 2340, Including delivery charge, total bill is 2400. Why return 2400?"
+REF-E-06,R2,yes,OK
+REF-H-01,R1,yes,OK
+REF-H-02,R1,yes,OK
+REF-H-03,R1,yes,OK
+REF-H-04,R1,yes,OK
+REF-M-01,R2,no,"Problem in notes. Why return all 4, 3 storage baskets are broken"
+REF-M-02,R1,yes,OK
+REF-M-03,R1,yes,OK
+REF-M-04,R1,yes,OK
+REF-M-05,R1,yes,OK
+REF-M-06,R1,yes,OK

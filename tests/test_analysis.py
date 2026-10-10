@@ -259,7 +259,7 @@ def test_run_all_writes_every_output_without_type3_fonts(two_arch_run):
     assert "\\toprule" in tex and "\\footnotesize" in tex and "\\setlength{\\tabcolsep}{3pt}" in tex
     for name in ("summary.md", "table_main_results.tex", "table_mcnemar.tex", "labeling_guide.md"):
         text = (out / name).read_text(encoding="utf-8")
-        assert "—" not in text and "–" not in text and " - " not in text
+        assert "\u2014" not in text and "\u2013" not in text and " - " not in text
         if name != "labeling_guide.md":  # the guide quotes a command line with -- flags
             assert "--" not in text
 
