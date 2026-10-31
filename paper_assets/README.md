@@ -1,0 +1,60 @@
+# Paper assets
+
+Everything here comes from results/main. To rebuild it, run these three commands in PowerShell:
+
+    .venv\Scripts\python.exe -m analysis.run_all --tag main
+    .venv\Scripts\python.exe -m analysis.paper_assets --tag main
+    .venv\Scripts\python.exe -m analysis.paper_report --tag main
+
+## Figures and paper sections
+
+The section names below are suggestions, because the paper outline is not in this repository.
+
+* fig_success_vs_energy: Results, cost and accuracy. Single column.
+* fig_success_by_category: Results, success by task type. Double column, use figure*.
+* fig_success_by_language: Results, success by task type, or the discussion of Banglish tasks. Single column.
+* fig_pass_k: Results, consistency across seeds. Single column.
+* fig_policy_violations: Results, policy compliance. Single column.
+* fig_tokens_latency: Results, cost and accuracy, or a section on overhead. Double column, use figure*.
+
+## Tables and paper sections
+
+* tables/main_results.tex: Results, opening table. It is a table* with 15 columns.
+* tables/mcnemar.tex: Results, statistical tests. Single column.
+* tables/breakdowns.csv: source values for the category and language text. It has no LaTeX version.
+
+main_results.tex and mcnemar.tex are byte for byte copies of table_main_results.tex and table_mcnemar.tex from results/main/analysis. They need the booktabs package. They have not been compiled, because LaTeX is not installed on the analysis machine, so check in Overleaf that the 15 column table fits the page width.
+
+## Upload to Overleaf
+
+1. Open the project and create a folder named figures and a folder named tables.
+2. Upload the six PDF files from figures/ into figures. The PNG files are for the Word report and are not needed.
+3. Upload main_results.tex and mcnemar.tex into tables.
+4. Add \usepackage{booktabs} and \usepackage{graphicx} to the preamble if they are missing.
+5. Include each table with \input{tables/main_results} and \input{tables/mcnemar}.
+6. Include a single column figure as shown here, and use figure* with \textwidth for the two double column figures:
+
+        \begin{figure}[t]
+        \centering
+        \includegraphics[width=\columnwidth]{figures/fig_success_vs_energy.pdf}
+        \caption{Success rate against mean net GPU energy per task.}
+        \label{fig:success_energy}
+        \end{figure}
+
+Do not upload labeling/, numbers/ or Analysis_Report.docx. They are working files, not paper sources.
+
+## Numbers
+
+numbers/key_numbers.md lists every number the paper will quote, each with its source file.
+
+## Failure labeling
+
+labeling/ holds one blank sheet per labeler and labeling_guide.md. Follow these steps:
+
+1. Give each labeler only their own sheet and the guide.
+2. Do not give labelers coordinator_key_do_not_share.csv. It maps each blind ID to the real run, architecture and model.
+3. When both sheets are complete, run this command:
+
+        .venv\Scripts\python.exe -m analysis.agreement --tag main --reviewer1 paper_assets\labeling\failures_to_label_reviewer1.csv --reviewer2 paper_assets\labeling\failures_to_label_reviewer2.csv
+
+The sheets hide the run ID, architecture and model. The trace summaries can still reveal the architecture, because they name agents and delegations, and labelers need those to assign codes such as HANDOFF_ERROR.

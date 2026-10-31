@@ -8,3 +8,4 @@ statsmodels
 matplotlib
 pytest
 tqdm
+python-docx
