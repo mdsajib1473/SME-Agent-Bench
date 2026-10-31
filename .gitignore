@@ -6,3 +6,4 @@ __pycache__/
 scripts/anonymity_terms.local.txt
 tasks/reviews/
 Prompt_Merge_and_Final_Check.md
+paper_assets/labeling/coordinator_key_do_not_share.csv

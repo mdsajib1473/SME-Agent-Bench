@@ -30,12 +30,14 @@ Confidence intervals are 95% bootstrap intervals over tasks (10,000 resamples, s
 
 ## pass^k
 
-* Qwen2.5 7B, ReAct: pass^1 21.2%, pass^2 15.0%, pass^3 15.0%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
-* Qwen2.5 7B, Plan and Execute: pass^1 30.0%, pass^2 22.5%, pass^3 21.2%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
-* Qwen2.5 7B, Supervisor: pass^1 26.2%, pass^2 20.0%, pass^3 17.5%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
-* Qwen2.5 14B, ReAct: pass^1 32.5%, pass^2 27.5%, pass^3 25.0%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
-* Qwen2.5 14B, Plan and Execute: pass^1 48.8%, pass^2 37.5%, pass^3 30.0%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
-* Qwen2.5 14B, Supervisor: pass^1 43.8%, pass^2 31.2%, pass^3 27.5%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
+pass^k averages comb(c, k) / comb(n, k) over tasks, where c is the number of successes among the n seeds of a task. pass^1 equals the success rate and pass^3 is the share of tasks solved in all 3 seeds.
+
+* Qwen2.5 7B, ReAct: pass^1 22.1%, pass^2 17.5%, pass^3 15.0%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
+* Qwen2.5 7B, Plan and Execute: pass^1 30.4%, pass^2 24.6%, pass^3 21.2%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
+* Qwen2.5 7B, Supervisor: pass^1 26.7%, pass^2 20.4%, pass^3 17.5%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
+* Qwen2.5 14B, ReAct: pass^1 32.1%, pass^2 27.1%, pass^3 25.0%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
+* Qwen2.5 14B, Plan and Execute: pass^1 47.1%, pass^2 36.7%, pass^3 30.0%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
+* Qwen2.5 14B, Supervisor: pass^1 39.2%, pass^2 31.2%, pass^3 27.5%. Source: results/main/runs.jsonl; pass^3 also in results/main/analysis/main_results.csv.
 
 ## McNemar tests after Holm correction
 

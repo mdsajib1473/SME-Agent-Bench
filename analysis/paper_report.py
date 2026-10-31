@@ -70,6 +70,10 @@ def table(doc, caption, body, header, rows, widths=None):
     grid = doc.add_table(rows=1 + len(rows), cols=len(header))
     grid.style = "Table Grid"
     grid.alignment = WD_TABLE_ALIGNMENT.CENTER
+    if widths:
+        grid.autofit = False
+        for column, width in zip(grid.columns, widths):
+            column.width = Inches(width)
     for r, cells in enumerate([header] + rows):
         for c, value in enumerate(cells):
             cell = grid.cell(r, c)
@@ -224,7 +228,8 @@ def build(tag, results_dir=RESULTS_DIR):
           f" {model_test['a_only']}, Holm p = {p_text(model_test['p_holm'])}). No architecture difference on"
           f" {model_label(small)} is significant. b counts tasks solved only by the first system and c tasks solved"
           " only by the second.",
-          ["Comparison", "n", "b", "c", "OR", "p", "Holm p"], mcnemar_rows(tests_df))
+          ["Comparison", "n", "b", "c", "OR", "p", "Holm p"], mcnemar_rows(tests_df),
+          widths=[3.1, 0.55, 0.55, 0.55, 0.7, 0.75, 0.75])
 
     doc.add_heading("Success by task type", level=1)
     figure(doc, "fig_success_by_category", 7.16,
@@ -245,11 +250,11 @@ def build(tag, results_dir=RESULTS_DIR):
 
     doc.add_heading("Consistency", level=1)
     figure(doc, "fig_pass_k", 3.5,
-           "Figure 4. pass^k: share of tasks solved in all of the first k seeds.",
-           "Requiring repeat success lowers every system, which shows that many tasks are solved in some seeds only."
+           "Figure 4. pass^k: chance that k seeds drawn at random from a task all succeed, averaged over tasks.",
+           "pass^1 equals the success rate and pass^3 is the share of tasks solved in all three seeds. Every system"
+           " falls as k rises, which shows that many tasks are solved in some seeds only."
            f" {model_label(large)} Plan and Execute falls the most, from {plan_pass_1:.1f}% at k = 1 to"
-           f" {pct(p14['pass_k'])} at k = 3."
-           " It still stays highest at k = 3.")
+           f" {pct(p14['pass_k'])} at k = 3, and it stays highest at k = 3.")
 
     doc.add_heading("Policy violations", level=1)
     figure(doc, "fig_policy_violations", 3.5,

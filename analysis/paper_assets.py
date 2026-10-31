@@ -12,7 +12,7 @@ import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-from analysis import report, stats
+from analysis import latex, report, stats
 from analysis.load import (
     CATEGORY_ORDER,
     LANGUAGE_ORDER,
@@ -158,7 +158,7 @@ def fig_success_energy(main_df, data, out_dir):
                                markerfacecolor=ARCH_VISUAL[a]["color"], markeredgecolor="black", markeredgewidth=0.8,
                                label=arch_label(a)) for a in data.archs]
         model_handles = [Patch(facecolor="0.3" if i == 0 else "white", edgecolor="black", linewidth=0.6,
-                               label=f"{model_size_b(m):g}B ({'filled' if i == 0 else 'open'})")
+                               label=f"{model_size_b(m):g}B ({'colored' if i == 0 else 'white'})")
                          for i, m in enumerate(data.models)]
         blank = Patch(facecolor="none", edgecolor="none", label=" ")
         handles = [arch_handles[0], model_handles[0], arch_handles[1], model_handles[1], arch_handles[2], blank]
@@ -232,7 +232,7 @@ def fig_pass_k(data, out_dir):
             ax.set_xlim(0.7, 3.3)
             ax.set_ylim(0, 60)
             ax.set_xlabel(f"k, {model_label(model)}")
-        axes[0].set_ylabel("$pass^{k}$ (% of tasks)")
+        axes[0].set_ylabel("$pass^{k}$ (%)")
         handles = [Line2D([], [], color="black", linewidth=0.9, linestyle=ARCH_VISUAL[a]["dash"],
                           marker=ARCH_VISUAL[a]["marker"], markersize=6, markerfacecolor=ARCH_VISUAL[a]["color"],
                           markeredgecolor="black", markeredgewidth=0.8, label=arch_label(a)) for a in data.archs]
@@ -288,7 +288,12 @@ def key_numbers(data, main_df, tests_df, failures_df):
             mean, low, high = metric_ci(rows[rows[column] == value], "success")
             lines.append(f"* {label(value)} ({name}, pooled): {pct(mean)} (95% CI {pct(low)} to {pct(high)})."
                          f" Source: {runs_file}.")
-    lines += ["", "## pass^k", ""]
+    lines += [
+        "", "## pass^k", "",
+        "pass^k averages comb(c, k) / comb(n, k) over tasks, where c is the number of successes among the n seeds of a"
+        " task. pass^1 equals the success rate and pass^3 is the share of tasks solved in all 3 seeds.",
+        "",
+    ]
     for r, label in cells:
         values = pass_k_values(cell_rows(rows, r["model"], r["arch"]))
         lines.append(f"* {label}: pass^1 {values[0]:.1f}%, pass^2 {values[1]:.1f}%, pass^3 {values[2]:.1f}%."
@@ -385,10 +390,13 @@ def build(tag, results_dir=RESULTS_DIR):
     fig_violations(data, folders["figures"])
     fig_pass_k(data, folders["figures"])
     copy_tables(analysis_dir, folders["tables"])
+    (folders["tables"] / "main_results_compact.tex").write_text(
+        latex.compact_table(main_df, report.pass_k_value(data), len(data.seeds)), encoding="utf-8")
     (folders["numbers"] / "key_numbers.md").write_text(
         key_numbers(data, main_df, tests_df, failures_df), encoding="utf-8")
-    labeled = blind_sheets(analysis_dir, analysis_dir / "labeling_guide.md", folders["labeling"])
-    return labeled
+    if (folders["labeling"] / "failures_to_label_reviewer1.csv").exists():
+        return 0
+    return blind_sheets(analysis_dir, analysis_dir / "labeling_guide.md", folders["labeling"])
 
 
 def main(argv=None):
@@ -398,7 +406,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     labeled = build(args.tag, args.results_dir)
-    print(f"paper assets written to {ASSETS_DIR}; {labeled} failed runs in each labeling sheet")
+    print(f"paper assets written to {ASSETS_DIR}; "
+          + (f"{labeled} failed runs in each labeling sheet" if labeled else "existing labeling sheets kept"))
     return 0
 
 

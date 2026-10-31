@@ -22,14 +22,19 @@ def bootstrap_ci(task_values, n_resamples=N_RESAMPLES, seed=BOOTSTRAP_SEED, leve
 
 
 def pass_hat_k(per_task_successes, k):
-    """Fraction of tasks solved in all of their first k seeds, over tasks with at least k seeds.
+    """Unbiased pass^k: comb(c, k) / comb(n, k) averaged over tasks with at least k seeds.
+
+    c is the number of successes among the n seeds of a task, so the value does not
+    depend on seed order, pass^1 equals the success rate and pass^n is the share of
+    tasks solved in all n seeds.
 
     Returns (value, number of tasks used).
     """
-    eligible = [list(s)[:k] for s in per_task_successes if len(s) >= k]
+    eligible = [list(s) for s in per_task_successes if len(s) >= k]
     if not eligible or k < 1:
         return math.nan, 0
-    return sum(all(s) for s in eligible) / len(eligible), len(eligible)
+    values = [math.comb(sum(bool(x) for x in s), k) / math.comb(len(s), k) for s in eligible]
+    return sum(values) / len(values), len(values)
 
 
 def majority_success(successes):

@@ -114,9 +114,11 @@ def test_holm_adjustment():
 def test_pass_hat_k_and_majority_vote():
     tasks = [[True, True, True], [True, False, True], [False, False, False], [True, True, True]]
     assert stats.pass_hat_k(tasks, 3) == (0.5, 4)
-    assert stats.pass_hat_k(tasks, 2) == (0.5, 4)
-    assert stats.pass_hat_k(tasks, 1) == (0.75, 4)
+    assert stats.pass_hat_k(tasks, 2) == (pytest.approx(7 / 12), 4)
+    assert stats.pass_hat_k(tasks, 1) == (pytest.approx(8 / 12), 4)
     assert stats.pass_hat_k([[True], [True, True]], 2) == (1.0, 1)
+    assert stats.pass_hat_k([[True, False, True]], 2) == stats.pass_hat_k([[False, True, True]], 2)
+    assert stats.pass_hat_k([[True, False, True]], 2)[0] == pytest.approx(1 / 3)
     assert stats.majority_success([True, True, False]) is True
     assert stats.majority_success([True, False, False]) is False
     assert stats.majority_success([True, False]) is False

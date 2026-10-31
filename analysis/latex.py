@@ -99,6 +99,49 @@ def main_table(main_df, tag, k, seeds, energy_note):
     return "\n".join(lines)
 
 
+def compact_table(main_df, k, seeds):
+    columns = [
+        ("Model", "l"), ("Architecture", "l"), ("Success", "r"), ("95\\% CI", "c"), (f"pass$^{{{k}}}$", "r"),
+        ("Trap viol.", "r"), ("Wall p50", "r"), ("E/task", "r"), ("E/succ.", "r"),
+    ]
+    caption = (
+        f"Main results ({seeds} seeds per task). Success, pass$^{{{k}}}$ (tasks solved in all {k} seeds) and Trap"
+        " viol. (policy violations on trap tasks) in percent. CI: bootstrap over tasks. Wall p50: median run time"
+        " in seconds. E/task and E/succ.: net GPU energy in Wh per run and per successful run."
+    )
+    lines = [
+        "\\begin{table*}[t]",
+        "\\centering",
+        "\\footnotesize",
+        f"\\caption{{{caption}}}",
+        "\\label{tab:main_results_compact}",
+        "\\begin{tabular}{" + "".join(align for _, align in columns) + "}",
+        "\\toprule",
+        " & ".join(name for name, _ in columns) + " \\\\",
+        "\\midrule",
+    ]
+    previous = None
+    for _, row in main_df.iterrows():
+        if previous is not None and row["model"] != previous:
+            lines.append("\\midrule")
+        model_cell = model_label(row["model"]) if row["model"] != previous else ""
+        previous = row["model"]
+        cells = [
+            model_cell,
+            arch_label(row["arch"]),
+            pct(row["success_rate"]),
+            f"[{pct(row['success_ci_low'])}, {pct(row['success_ci_high'])}]",
+            pct(row["pass_k"]),
+            pct(row["trap_violation_rate"]),
+            num(row["wall_median_s"]),
+            energy(row["mean_net_energy_wh"]),
+            energy(row["energy_per_success_wh"]),
+        ]
+        lines.append(" & ".join(cells) + " \\\\")
+    lines += ["\\bottomrule", "\\end{tabular}", "\\end{table*}", ""]
+    return "\n".join(lines)
+
+
 def mcnemar_table(tests_df, tag, seeds):
     vote = (
         "per task success in the single seed" if seeds == 1
